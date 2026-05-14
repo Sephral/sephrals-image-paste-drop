@@ -1,0 +1,44 @@
+name: Validate Manifest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "module.json"
+      - "package.json"
+      - "lang/**"
+      - "scripts/**"
+      - "styles/**"
+      - "templates/**"
+      - "README.md"
+      - "LICENSE.md"
+      - "build/validate-manifest.mjs"
+      - ".github/workflows/validate-manifest.yml"
+  pull_request:
+    paths:
+      - "module.json"
+      - "package.json"
+      - "lang/**"
+      - "scripts/**"
+      - "styles/**"
+      - "templates/**"
+      - "README.md"
+      - "LICENSE.md"
+      - "build/validate-manifest.mjs"
+      - ".github/workflows/validate-manifest.yml"
+
+jobs:
+  validate-manifest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate module manifest
+        run: npm run check:manifest

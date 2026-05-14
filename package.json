@@ -1,0 +1,14 @@
+{
+  "name": "sephrals-image-paste-drop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/sipd.js",
+    "check:manifest": "node build/validate-manifest.mjs",
+    "release:prepare": "node build/prepare-release.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

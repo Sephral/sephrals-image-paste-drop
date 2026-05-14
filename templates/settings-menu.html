@@ -1,0 +1,153 @@
+<form class="sipd-settings-form sipd-shell" data-ui-theme="{{uiTheme}}">
+  <section class="sipd-hero">
+    <div class="sipd-eyebrow">{{labels.eyebrow}}</div>
+    <div class="sipd-heading-row">
+      <div>
+        <h2 class="sipd-heading">{{labels.title}}</h2>
+        <p class="sipd-summary sipd-settings-form__intro">{{labels.intro}}</p>
+      </div>
+      <div class="sipd-stat-inline">
+        <span class="sipd-stat-value" data-preview-theme-value>{{currentThemeLabel}}</span>
+        <span class="sipd-stat-label">{{labels.previewThemeLabel}}</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="sipd-panel sipd-settings-form__section">
+    <header class="sipd-panel-header">
+      <div class="sipd-panel-heading">
+        <span class="sipd-panel-title">{{labels.appearance}}</span>
+        <span class="sipd-panel-hint">{{labels.themeHint}}</span>
+      </div>
+    </header>
+
+    <div class="form-group stacked">
+      <label for="sipd-ui-theme">{{labels.theme}}</label>
+      <div class="form-fields">
+        <select id="sipd-ui-theme" name="uiTheme" title="{{labels.theme}}">
+          {{#each themeChoices}}
+          <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+          {{/each}}
+        </select>
+      </div>
+      <p class="notes">{{labels.themeHint}}</p>
+    </div>
+
+    <div class="sipd-preview-card">
+      <div class="sipd-preview-card__header">
+        <div>
+          <div class="sipd-eyebrow">{{labels.previewBadge}}</div>
+          <strong class="sipd-preview-card__title">{{labels.previewTitle}}</strong>
+        </div>
+        <span class="sipd-pill is-type" data-preview-action-value>{{previewActionLabel}}</span>
+      </div>
+      <p class="sipd-preview-card__summary">{{labels.previewSummary}}</p>
+      <div class="sipd-preview-card__meta">
+        <span class="sipd-pill is-available">{{labels.previewShare}}</span>
+        <span class="sipd-pill">{{labels.previewScene}}</span>
+      </div>
+    </div>
+  </section>
+
+  {{#if canManageAccess}}
+  <section class="sipd-panel sipd-settings-form__section">
+    <header class="sipd-panel-header">
+      <div class="sipd-panel-heading">
+        <span class="sipd-panel-title">{{labels.access}}</span>
+        <span class="sipd-panel-hint">{{labels.allowPlayerToolUseHint}}</span>
+      </div>
+    </header>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="allowPlayerToolUse" {{checked allowPlayerToolUse}}>
+      <span>
+        <strong>{{labels.allowPlayerToolUse}}</strong>
+        <small>{{labels.allowPlayerToolUseHint}}</small>
+      </span>
+    </label>
+  </section>
+  {{/if}}
+
+  <section class="sipd-panel sipd-settings-form__section">
+    <header class="sipd-panel-header">
+      <div class="sipd-panel-heading">
+        <span class="sipd-panel-title">{{labels.triggers}}</span>
+        <span class="sipd-panel-hint">{{labels.previewHint}}</span>
+      </div>
+    </header>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="enablePasteImport" {{checked enablePasteImport}}>
+      <span>
+        <strong>{{labels.enablePaste}}</strong>
+        <small>{{labels.enablePasteHint}}</small>
+      </span>
+    </label>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="enableDropImport" {{checked enableDropImport}}>
+      <span>
+        <strong>{{labels.enableDrop}}</strong>
+        <small>{{labels.enableDropHint}}</small>
+      </span>
+    </label>
+  </section>
+
+  <section class="sipd-panel sipd-settings-form__section">
+    <header class="sipd-panel-header">
+      <div class="sipd-panel-heading">
+        <span class="sipd-panel-title">{{labels.defaults}}</span>
+        <span class="sipd-panel-hint">{{labels.previewActionLabel}}</span>
+      </div>
+    </header>
+
+    <div class="form-group stacked">
+      <label for="sipd-default-action">{{labels.defaultAction}}</label>
+      <div class="form-fields">
+        <select id="sipd-default-action" name="defaultAction" title="{{labels.defaultAction}}">
+          {{#each actionChoices}}
+          <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+          {{/each}}
+        </select>
+      </div>
+      <p class="notes">{{labels.defaultActionHint}}</p>
+    </div>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="rememberLastAction" {{checked rememberLastAction}}>
+      <span>
+        <strong>{{labels.rememberAction}}</strong>
+        <small>{{labels.rememberActionHint}}</small>
+      </span>
+    </label>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="defaultShareToPlayers" {{checked defaultShareToPlayers}}>
+      <span>
+        <strong>{{labels.defaultShare}}</strong>
+        <small>{{labels.defaultShareHint}}</small>
+      </span>
+    </label>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="defaultActivateScene" {{checked defaultActivateScene}}>
+      <span>
+        <strong>{{labels.defaultActivateScene}}</strong>
+        <small>{{labels.defaultActivateSceneHint}}</small>
+      </span>
+    </label>
+
+    <label class="sipd-settings-form__checkbox-row sipd-choice-row">
+      <input type="checkbox" name="defaultNavigation" {{checked defaultNavigation}}>
+      <span>
+        <strong>{{labels.defaultNavigation}}</strong>
+        <small>{{labels.defaultNavigationHint}}</small>
+      </span>
+    </label>
+  </section>
+
+  <footer class="sipd-settings-form__actions">
+    <button type="submit" class="bright">{{labels.save}}</button>
+    <button type="button" data-action="close">{{labels.cancel}}</button>
+  </footer>
+</form>

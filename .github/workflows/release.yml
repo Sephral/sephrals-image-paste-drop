@@ -1,0 +1,77 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate script syntax
+        run: npm run check
+
+      - name: Validate module manifest
+        run: npm run check:manifest
+
+      - name: Read release metadata
+        id: metadata
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          MODULE_ID=$(node -p "require('./module.json').id")
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          TAG_NAME="${INPUT_TAG:-${GITHUB_REF_NAME:-v$VERSION}}"
+
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must start with v and match semantic versioning, got: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          if [[ "$TAG_NAME" != "v$VERSION" ]]; then
+            echo "package.json version ($VERSION) must match release tag ($TAG_NAME)." >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "module_id=$MODULE_ID" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release package
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npm run release:prepare
+
+      - name: Create ZIP archive
+        working-directory: .release/package
+        run: zip -r ../${{ steps.metadata.outputs.module_id }}.zip .
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.metadata.outputs.tag_name }}
+          generate_release_notes: true
+          files: |
+            .release/package/module.json
+            .release/${{ steps.metadata.outputs.module_id }}.zip
