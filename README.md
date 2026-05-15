@@ -2,6 +2,12 @@
 
 Sephral's Image Paste & Drop lets you paste images from the clipboard with `Ctrl+V` or drag and drop image content into Foundry and decide what should happen next.
 
+## Demo
+
+![SCBR demo](media/demo.gif)
+
+If the embedded preview is not available in your GitHub view, please check the media folder.
+
 ## Current behavior
 
 - Detects pasted clipboard images outside of text inputs
@@ -60,8 +66,6 @@ The module stores UI and workflow preferences as client scoped settings. These i
 
 ### Current limitations
 
-The current implementation now stores new persistent files in the world data context. Existing documents that already reference older module scoped paths continue to use those paths until they are replaced.
-
 Client side cleanup is still limited by Foundry because the browser side file tools provide browse, create, and upload, but no reliable delete operation.
 
 The current mitigation strategy is:
@@ -71,19 +75,6 @@ The current mitigation strategy is:
 - reuse a deterministic shared image path per user for `Share image`
 - use content-addressed filenames for other persistent uploads so identical image content reuses the same stored file
 - avoid persistent writes for pure preview usage
-
-### Why SIPD does not use a single temporary file first
-
-Clipboard and dropped image data is already kept temporary until the user confirms an action. The preview dialog uses a browser object URL, so no persistent file is created before the decision is made.
-
-Because of that, writing every import into one shared temporary file first would usually add an extra write without reducing storage. It would also be risky when two users import images at the same time or when a persistent action still needs its own stable path afterwards.
-
-The current strategy is therefore:
-
-- keep images temporary in memory for preview only
-- write to world scoped storage only after the user confirms an action that needs a persistent path
-- reuse fixed target paths for repeated actions where one stable file is enough
-- use content hashes for general persistent uploads so filename collisions do not matter and identical content can deduplicate naturally
 
 ## Access model
 
@@ -115,5 +106,3 @@ It lets each user configure:
 - The current scene foreground target is useful for map overlays and framing assets.
 - Uploading requires the Foundry file upload permission.
 - Tile insertion requires an active viewed scene.
-- A pure preview does not upload the image unless the image should also be shown to players.
-- New persistent uploads now live in world data.
