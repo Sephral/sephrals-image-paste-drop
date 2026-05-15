@@ -89,13 +89,13 @@ The current strategy is therefore:
 
 By default only the GM can use SIPD.
 
-The GM can enable a restricted player mode in the SIPD settings dialog.
+The GM can enable a restricted player mode in the SIPD settings.
 
 In restricted player mode, non GM users can open the import flow but are limited to `Preview only`. They cannot create scenes, tiles, journal entries, uploads, or player facing broadcasts through SIPD.
 
-## Settings dialog
+## Settings
 
-The Foundry settings sidebar now exposes a dedicated Image Paste & Drop settings dialog.
+The Foundry settings sidebar exposes the SIPD options directly on the standard module settings page.
 
 It lets each user configure:
 

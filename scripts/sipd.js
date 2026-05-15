@@ -38,33 +38,62 @@ const PLAYER_ALLOWED_ACTIONS = Object.freeze([
   ACTIONS.PREVIEW_ONLY
 ]);
 
+function getAllActionChoices() {
+  return [
+    {value: ACTIONS.SCENE_BACKGROUND, label: localize("SIPD.Action.SceneBackground")},
+    {value: ACTIONS.SCENE_BACKGROUND_CURRENT, label: localize("SIPD.Action.SceneBackgroundCurrent")},
+    {value: ACTIONS.SCENE_FOREGROUND_CURRENT, label: localize("SIPD.Action.SceneForegroundCurrent")},
+    {value: ACTIONS.TILE_CENTERED, label: localize("SIPD.Action.TileCentered")},
+    {value: ACTIONS.TILE_FIT, label: localize("SIPD.Action.TileFit")},
+    {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Action.JournalImage")},
+    {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Action.UploadDirectory")},
+    {value: ACTIONS.SHARE_IMAGE, label: localize("SIPD.Action.ShareImage")},
+    {value: ACTIONS.PREVIEW_ONLY, label: localize("SIPD.Action.PreviewOnly")}
+  ];
+}
+
+function getActionSettingChoices() {
+  return Object.fromEntries(getAllActionChoices().map(choice => [choice.value, choice.label]));
+}
+
+function getThemeSettingChoices() {
+  return Object.fromEntries(getThemeChoices().map(choice => [choice.value, choice.label]));
+}
+
 Hooks.once("init", () => {
   game.settings.register(MODULE_ID, ENABLE_PASTE_SETTING, {
-    name: localize("SIPD.Settings.Enable.Name"),
-    hint: localize("SIPD.Settings.Enable.Hint"),
+    name: localize("SIPD.Settings.EnablePaste.Label"),
+    hint: localize("SIPD.Settings.EnablePaste.Hint"),
     scope: "client",
-    config: false,
+    config: true,
     type: Boolean,
     default: true
   });
 
   game.settings.register(MODULE_ID, ENABLE_DROP_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.EnableDrop.Label"),
+    hint: localize("SIPD.Settings.EnableDrop.Hint"),
     type: Boolean,
     default: true
   });
 
   game.settings.register(MODULE_ID, DEFAULT_ACTION_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.DefaultAction.Label"),
+    hint: localize("SIPD.Settings.DefaultAction.Hint"),
     type: String,
+    choices: getActionSettingChoices(),
     default: ACTIONS.SCENE_BACKGROUND_CURRENT
   });
 
   game.settings.register(MODULE_ID, REMEMBER_LAST_ACTION_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.RememberAction.Label"),
+    hint: localize("SIPD.Settings.RememberAction.Hint"),
     type: Boolean,
     default: true
   });
@@ -78,21 +107,27 @@ Hooks.once("init", () => {
 
   game.settings.register(MODULE_ID, DEFAULT_SHARE_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.DefaultShare.Label"),
+    hint: localize("SIPD.Settings.DefaultShare.Hint"),
     type: Boolean,
     default: false
   });
 
   game.settings.register(MODULE_ID, DEFAULT_ACTIVATE_SCENE_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.DefaultActivateScene.Label"),
+    hint: localize("SIPD.Settings.DefaultActivateScene.Hint"),
     type: Boolean,
     default: true
   });
 
   game.settings.register(MODULE_ID, DEFAULT_NAVIGATION_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.DefaultNavigation.Label"),
+    hint: localize("SIPD.Settings.DefaultNavigation.Hint"),
     type: Boolean,
     default: true
   });
@@ -113,15 +148,20 @@ Hooks.once("init", () => {
 
   game.settings.register(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING, {
     scope: "world",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.AllowPlayerToolUse.Label"),
+    hint: localize("SIPD.Settings.AllowPlayerToolUse.Hint"),
     type: Boolean,
     default: false
   });
 
   game.settings.register(MODULE_ID, UI_THEME_SETTING, {
     scope: "client",
-    config: false,
+    config: true,
+    name: localize("SIPD.Settings.Theme.Label"),
+    hint: localize("SIPD.Settings.Theme.Hint"),
     type: String,
+    choices: getThemeSettingChoices(),
     default: UI_THEMES.SIGNATURE
   });
 
@@ -130,15 +170,6 @@ Hooks.once("init", () => {
     config: false,
     type: Object,
     default: {}
-  });
-
-  game.settings.registerMenu(MODULE_ID, "preferences", {
-    name: localize("SIPD.Settings.Menu.Name"),
-    label: localize("SIPD.Settings.Menu.Label"),
-    hint: localize("SIPD.Settings.Menu.Hint"),
-    icon: "fas fa-images",
-    type: SIPDSettingsMenu,
-    restricted: false
   });
 });
 
@@ -654,17 +685,15 @@ function actionOptionsMarkup(selectedAction=null) {
 function getActionChoices() {
   const hasScene = hasCanvasScene();
   const allowedActions = new Set(getPermittedActions());
-  return [
-    {value: ACTIONS.SCENE_BACKGROUND, label: localize("SIPD.Action.SceneBackground")},
-    {value: ACTIONS.SCENE_BACKGROUND_CURRENT, label: localize("SIPD.Action.SceneBackgroundCurrent"), disabled: !hasScene},
-    {value: ACTIONS.SCENE_FOREGROUND_CURRENT, label: localize("SIPD.Action.SceneForegroundCurrent"), disabled: !hasScene},
-    {value: ACTIONS.TILE_CENTERED, label: localize("SIPD.Action.TileCentered"), disabled: !hasScene},
-    {value: ACTIONS.TILE_FIT, label: localize("SIPD.Action.TileFit"), disabled: !hasScene},
-    {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Action.JournalImage")},
-    {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Action.UploadDirectory")},
-    {value: ACTIONS.SHARE_IMAGE, label: localize("SIPD.Action.ShareImage")},
-    {value: ACTIONS.PREVIEW_ONLY, label: localize("SIPD.Action.PreviewOnly")}
-  ].filter(choice => allowedActions.has(choice.value));
+  return getAllActionChoices().map(choice => ({
+    ...choice,
+    disabled: [
+      ACTIONS.SCENE_BACKGROUND_CURRENT,
+      ACTIONS.SCENE_FOREGROUND_CURRENT,
+      ACTIONS.TILE_CENTERED,
+      ACTIONS.TILE_FIT
+    ].includes(choice.value) ? !hasScene : false
+  })).filter(choice => allowedActions.has(choice.value));
 }
 
 function getActionBehavior(action) {
@@ -1230,164 +1259,99 @@ function escapeHtml(value) {
   return foundry.utils.escapeHTML(String(value ?? ""));
 }
 
-class SIPDSettingsMenu extends FormApplication {
-  static get defaultOptions() {
-    const savedWindowState = getSavedWindowState(WINDOW_KEYS.SETTINGS, {width: 640, height: 780});
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: `${MODULE_ID}-settings-menu`,
-      title: localize("SIPD.Settings.Menu.Title"),
-      template: `modules/${MODULE_ID}/templates/settings-menu.html`,
-      classes: ["sipd-settings", "sipd-app"],
-      width: savedWindowState.width ?? 640,
-      height: savedWindowState.height,
-      resizable: true,
-      submitOnChange: false,
-      closeOnSubmit: true
-    });
-  }
+export const __test__ = {
+  MODULE_ID,
+  STORAGE_ROOT,
+  ENABLE_PASTE_SETTING,
+  ENABLE_DROP_SETTING,
+  DEFAULT_ACTION_SETTING,
+  REMEMBER_LAST_ACTION_SETTING,
+  LAST_ACTION_SETTING,
+  DEFAULT_SHARE_SETTING,
+  DEFAULT_ACTIVATE_SCENE_SETTING,
+  DEFAULT_NAVIGATION_SETTING,
+  DEFAULT_UPLOAD_DIRECTORY_SETTING,
+  UPLOAD_DIRECTORY_HISTORY_SETTING,
+  ALLOW_PLAYER_TOOL_SETTING,
+  UI_THEME_SETTING,
+  WINDOW_STATE_SETTING,
+  WORLD_STORAGE_ROOT,
+  UI_THEMES,
+  WINDOW_KEYS,
+  ACTIONS,
+  PLAYER_ALLOWED_ACTIONS,
+  getAllActionChoices,
+  getActionSettingChoices,
+  getThemeSettingChoices,
+  onPaste,
+  onDragOver,
+  onDrop,
+  isEditableTarget,
+  extractClipboardImage,
+  hasTransferableImage,
+  extractDroppedImage,
+  fetchDroppedImage,
+  guessMimeTypeFromUri,
+  fileNameFromUri,
+  canCurrentUserUseTool,
+  getPermittedActions,
+  handleImportedImage,
+  requiresPersistentPath,
+  defaultUploadDirectory,
+  getWorldStorageRoot,
+  getRootedStoragePath,
+  normalizeUploadDirectory,
+  getFileExtension,
+  getReusableManagedUploadTarget,
+  getUploadDirectoryChoices,
+  hashFileContent,
+  buildContentAddressedUploadFileName,
+  rememberUploadDirectory,
+  prepareClipboardFile,
+  extensionForMimeType,
+  slugify,
+  defaultDocumentName,
+  uniqueDocumentName,
+  readImageDimensions,
+  promptForAction,
+  uploadDirectoryOptionsMarkup,
+  actionOptionsMarkup,
+  getActionChoices,
+  getActionBehavior,
+  actionSupportsShareToPlayers,
+  actionUsesSelectableUploadDirectory,
+  configureDialogForm,
+  getDialogDefaults,
+  getUITheme,
+  getThemeChoices,
+  getSavedWindowStates,
+  getSavedWindowState,
+  getApplicationElement,
+  getApplicationSize,
+  applyWindowState,
+  queueWindowStateSave,
+  persistWindowState,
+  bindWindowStatePersistence,
+  applyDialogTheme,
+  styleActionButtons,
+  uploadClipboardFile,
+  findExistingFilePath,
+  ensureDirectoryExists,
+  executeAction,
+  hasCanvasScene,
+  createSceneFromImage,
+  updateCurrentSceneBackground,
+  updateCurrentSceneForeground,
+  applyImageToSceneLevel,
+  applyImageToSceneForeground,
+  supportsSceneLevels,
+  createDefaultLevelData,
+  createTileFromImage,
+  fitDimensions,
+  createJournalEntryFromImage,
+  shareImageToPlayers,
+  openImagePreview,
+  localize,
+  escapeHtml
+};
 
-  getData() {
-    const currentTheme = getUITheme();
-    const defaultAction = game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING);
-    const currentThemeLabel = getThemeChoices().find(choice => choice.value === currentTheme)?.label ?? localize("SIPD.Settings.Theme.OptionSignature");
-    return {
-      enablePasteImport: game.settings.get(MODULE_ID, ENABLE_PASTE_SETTING),
-      enableDropImport: game.settings.get(MODULE_ID, ENABLE_DROP_SETTING),
-      canManageAccess: game.user?.isGM,
-      allowPlayerToolUse: game.settings.get(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING),
-      defaultAction,
-      rememberLastAction: game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING),
-      defaultShareToPlayers: game.settings.get(MODULE_ID, DEFAULT_SHARE_SETTING),
-      defaultActivateScene: game.settings.get(MODULE_ID, DEFAULT_ACTIVATE_SCENE_SETTING),
-      defaultNavigation: game.settings.get(MODULE_ID, DEFAULT_NAVIGATION_SETTING),
-      uiTheme: currentTheme,
-      themeChoices: getThemeChoices().map(choice => ({
-        ...choice,
-        selected: choice.value === currentTheme
-      })),
-      actionChoices: getActionChoices().map(choice => ({
-        ...choice,
-        selected: choice.value === defaultAction
-      })),
-      currentThemeLabel,
-      previewActionLabel: getActionChoices().find(choice => choice.value === defaultAction)?.label ?? localize("SIPD.Action.PreviewOnly"),
-      labels: {
-        title: localize("SIPD.Settings.Menu.Title"),
-        eyebrow: localize("SIPD.Settings.Dialog.Eyebrow"),
-        intro: localize("SIPD.Settings.Dialog.Intro"),
-        appearance: localize("SIPD.Settings.Dialog.Appearance"),
-        access: localize("SIPD.Settings.Dialog.Access"),
-        triggers: localize("SIPD.Settings.Dialog.Triggers"),
-        defaults: localize("SIPD.Settings.Dialog.Defaults"),
-        allowPlayerToolUse: localize("SIPD.Settings.AllowPlayerToolUse.Label"),
-        allowPlayerToolUseHint: localize("SIPD.Settings.AllowPlayerToolUse.Hint"),
-        theme: localize("SIPD.Settings.Theme.Label"),
-        themeHint: localize("SIPD.Settings.Theme.Hint"),
-        previewTitle: localize("SIPD.Settings.Preview.Title"),
-        previewHint: localize("SIPD.Settings.Preview.Hint"),
-        previewBadge: localize("SIPD.Settings.Preview.Badge"),
-        previewThemeLabel: localize("SIPD.Settings.Preview.ThemeLabel"),
-        previewSummary: localize("SIPD.Settings.Preview.Summary"),
-        previewActionLabel: localize("SIPD.Settings.Preview.ActionLabel"),
-        previewShare: localize("SIPD.Settings.Preview.Share"),
-        previewScene: localize("SIPD.Settings.Preview.Scene"),
-        enablePaste: localize("SIPD.Settings.EnablePaste.Label"),
-        enablePasteHint: localize("SIPD.Settings.EnablePaste.Hint"),
-        enableDrop: localize("SIPD.Settings.EnableDrop.Label"),
-        enableDropHint: localize("SIPD.Settings.EnableDrop.Hint"),
-        rememberAction: localize("SIPD.Settings.RememberAction.Label"),
-        rememberActionHint: localize("SIPD.Settings.RememberAction.Hint"),
-        defaultAction: localize("SIPD.Settings.DefaultAction.Label"),
-        defaultActionHint: localize("SIPD.Settings.DefaultAction.Hint"),
-        defaultShare: localize("SIPD.Settings.DefaultShare.Label"),
-        defaultShareHint: localize("SIPD.Settings.DefaultShare.Hint"),
-        defaultActivateScene: localize("SIPD.Settings.DefaultActivateScene.Label"),
-        defaultActivateSceneHint: localize("SIPD.Settings.DefaultActivateScene.Hint"),
-        defaultNavigation: localize("SIPD.Settings.DefaultNavigation.Label"),
-        defaultNavigationHint: localize("SIPD.Settings.DefaultNavigation.Hint"),
-        save: localize("SIPD.Settings.Dialog.Save"),
-        cancel: localize("SIPD.Settings.Dialog.Cancel")
-      }
-    };
-  }
-
-  activateListeners(html) {
-    super.activateListeners(html);
-    const root = html[0];
-    const rememberField = root?.querySelector('[name="rememberLastAction"]');
-    const defaultActionField = root?.querySelector('[name="defaultAction"]');
-    const themeField = root?.querySelector('[name="uiTheme"]');
-    const previewThemeValue = root?.querySelector('[data-preview-theme-value]');
-    const previewActionValue = root?.querySelector('[data-preview-action-value]');
-    const cancelButton = root?.querySelector('[data-action="close"]');
-
-    applyDialogTheme(this.element?.[0], themeField?.value ?? getUITheme());
-    applyDialogTheme(root?.querySelector(".sipd-shell"), themeField?.value ?? getUITheme());
-    styleActionButtons(root, {
-      primaryLabel: localize("SIPD.Settings.Dialog.Save"),
-      secondaryLabel: localize("SIPD.Settings.Dialog.Cancel")
-    });
-    applyWindowState(this, WINDOW_KEYS.SETTINGS, {width: 640, height: 780});
-    bindWindowStatePersistence(this, WINDOW_KEYS.SETTINGS);
-
-    cancelButton?.addEventListener("click", event => {
-      event.preventDefault();
-      this.close();
-    });
-
-    themeField?.addEventListener("change", () => {
-      const nextTheme = themeField.value;
-      applyDialogTheme(this.element?.[0], nextTheme);
-      applyDialogTheme(root?.querySelector(".sipd-shell"), nextTheme);
-      if ( previewThemeValue ) {
-        previewThemeValue.textContent = getThemeChoices().find(choice => choice.value === nextTheme)?.label ?? localize("SIPD.Settings.Theme.OptionSignature");
-      }
-    });
-
-    defaultActionField?.addEventListener("change", () => {
-      if ( previewActionValue ) {
-        previewActionValue.textContent = defaultActionField.selectedOptions[0]?.textContent?.trim() ?? previewActionValue.textContent;
-      }
-    });
-
-    if ( !rememberField || !defaultActionField ) return;
-
-    const syncDisabledState = () => {
-      defaultActionField.disabled = rememberField.checked;
-    };
-
-    rememberField.addEventListener("change", syncDisabledState);
-    syncDisabledState();
-  }
-
-  async _updateObject(_event, formData) {
-    const data = foundry.utils.expandObject(formData);
-    if ( game.user?.isGM ) {
-      await game.settings.set(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING, Boolean(data.allowPlayerToolUse));
-    }
-    await game.settings.set(MODULE_ID, ENABLE_PASTE_SETTING, Boolean(data.enablePasteImport));
-    await game.settings.set(MODULE_ID, ENABLE_DROP_SETTING, Boolean(data.enableDropImport));
-    await game.settings.set(MODULE_ID, REMEMBER_LAST_ACTION_SETTING, Boolean(data.rememberLastAction));
-    await game.settings.set(MODULE_ID, DEFAULT_ACTION_SETTING, String(data.defaultAction || ACTIONS.SCENE_BACKGROUND_CURRENT));
-    await game.settings.set(MODULE_ID, DEFAULT_SHARE_SETTING, Boolean(data.defaultShareToPlayers));
-    await game.settings.set(MODULE_ID, DEFAULT_ACTIVATE_SCENE_SETTING, Boolean(data.defaultActivateScene));
-    await game.settings.set(MODULE_ID, DEFAULT_NAVIGATION_SETTING, Boolean(data.defaultNavigation));
-    await game.settings.set(MODULE_ID, UI_THEME_SETTING, data.uiTheme === UI_THEMES.FOUNDRY ? UI_THEMES.FOUNDRY : UI_THEMES.SIGNATURE);
-  }
-
-  setPosition(...args) {
-    const position = super.setPosition(...args);
-    queueWindowStateSave(this, WINDOW_KEYS.SETTINGS);
-    return position;
-  }
-
-  async close(options) {
-    this._sipdWindowStateObserver?.disconnect?.();
-    if ( this._sipdWindowStatePointerUpHandler ) {
-      getApplicationElement(this)?.removeEventListener?.("pointerup", this._sipdWindowStatePointerUpHandler);
-    }
-    clearTimeout(this._sipdWindowStateTimer);
-    await persistWindowState(this, WINDOW_KEYS.SETTINGS);
-    return super.close(options);
-  }
-}
