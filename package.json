@@ -6,6 +6,8 @@
   "scripts": {
     "check": "node --check scripts/sipd.js",
     "check:manifest": "node build/validate-manifest.mjs",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
     "release:prepare": "node build/prepare-release.mjs"
   },
   "engines": {
