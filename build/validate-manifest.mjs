@@ -108,9 +108,7 @@ for (const language of moduleManifest.languages) {
 }
 
 await ensurePathExists("README.md", "README.md");
-if (await ensureOptionalPath("LICENSE.md")) {
-  await ensurePathExists("LICENSE.md", "LICENSE.md");
-}
+await ensurePathExists("LICENSE.md", "LICENSE.md");
 if (await ensureOptionalPath("templates")) {
   await ensurePathExists("templates", "templates");
 }

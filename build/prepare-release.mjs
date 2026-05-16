@@ -11,8 +11,8 @@ const moduleJsonPath = path.join(rootDir, "module.json");
 const releaseRoot = path.join(rootDir, ".release");
 const packageDir = path.join(releaseRoot, "package");
 
-const optionalEntries = ["LICENSE.md", "templates"];
-const requiredEntries = ["README.md", "lang", "scripts", "styles"];
+const optionalEntries = ["templates"];
+const requiredEntries = ["LICENSE.md", "README.md", "lang", "media", "scripts", "styles"];
 
 async function pathExists(relativePath) {
   try {
