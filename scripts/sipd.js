@@ -11,9 +11,12 @@ const DEFAULT_NAVIGATION_SETTING = "defaultNavigation";
 const DEFAULT_UPLOAD_DIRECTORY_SETTING = "defaultUploadDirectory";
 const UPLOAD_DIRECTORY_HISTORY_SETTING = "uploadDirectoryHistory";
 const ALLOW_PLAYER_TOOL_SETTING = "allowPlayerToolUse";
+const UI_LANGUAGE_SETTING = "uiLanguage";
 const UI_THEME_SETTING = "uiTheme";
 const WINDOW_STATE_SETTING = "windowState";
 const WORLD_STORAGE_ROOT = MODULE_ID;
+const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
+const DEFAULT_UI_LANGUAGE = "en";
 const UI_THEMES = {
   SIGNATURE: "signature",
   FOUNDRY: "foundry"
@@ -37,6 +40,8 @@ const ACTIONS = {
 const PLAYER_ALLOWED_ACTIONS = Object.freeze([
   ACTIONS.PREVIEW_ONLY
 ]);
+const MODULE_TRANSLATION_CACHE = new Map();
+let MODULE_TRANSLATION_LOAD = null;
 
 function getAllActionChoices() {
   return [
@@ -60,7 +65,96 @@ function getThemeSettingChoices() {
   return Object.fromEntries(getThemeChoices().map(choice => [choice.value, choice.label]));
 }
 
+function interpolateTemplate(template, data = {}) {
+  return String(template ?? "").replace(/\{([^}]+)\}/g, (_match, field) => {
+    const replacement = data[field];
+    return replacement === undefined || replacement === null ? `{${field}}` : String(replacement);
+  });
+}
+
+function getRegisteredSettingValue(settingKey, fallback) {
+  try {
+    const value = game.settings.get(MODULE_ID, settingKey);
+    return value === undefined ? fallback : value;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function normalizeUiLanguage(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if ( !normalized ) return DEFAULT_UI_LANGUAGE;
+  if ( SUPPORTED_UI_LANGUAGES.includes(normalized) ) return normalized;
+
+  const baseLanguage = normalized.split(/[-_.]/)[0];
+  return SUPPORTED_UI_LANGUAGES.includes(baseLanguage) ? baseLanguage : DEFAULT_UI_LANGUAGE;
+}
+
+function getPreferredLanguage() {
+  return getRegisteredSettingValue(UI_LANGUAGE_SETTING, "default");
+}
+
+function getModuleLanguage(preferredLanguage = getPreferredLanguage()) {
+  if ( SUPPORTED_UI_LANGUAGES.includes(preferredLanguage) ) return preferredLanguage;
+  return normalizeUiLanguage(game.i18n?.lang);
+}
+
+async function loadModuleTranslations(language) {
+  const normalized = normalizeUiLanguage(language);
+  if ( MODULE_TRANSLATION_CACHE.has(normalized) ) return MODULE_TRANSLATION_CACHE.get(normalized);
+
+  const response = await fetch(`modules/${MODULE_ID}/lang/${normalized}.json`);
+  if ( !response.ok ) throw new Error(`Failed to load ${normalized} translations (${response.status})`);
+
+  const translations = await response.json();
+  MODULE_TRANSLATION_CACHE.set(normalized, translations);
+  return translations;
+}
+
+async function ensureModuleTranslationsLoaded() {
+  if ( !MODULE_TRANSLATION_LOAD ) {
+    MODULE_TRANSLATION_LOAD = Promise.all(SUPPORTED_UI_LANGUAGES.map((language) => loadModuleTranslations(language)))
+      .catch((error) => {
+        console.warn(`${MODULE_ID} |`, error);
+        return null;
+      });
+  }
+
+  return MODULE_TRANSLATION_LOAD;
+}
+
+function refreshLocalizedUi() {
+  for ( const app of Object.values(ui?.windows ?? {}) ) {
+    const element = getApplicationElement(app);
+    if ( !element?.classList?.contains?.("sipd-app") ) continue;
+    if ( app.options?.window ) app.options.window.title = localize("SIPD.Dialog.Title");
+    if ( typeof app.render === "function" ) app.render(true);
+  }
+}
+
+function resetModuleTranslations() {
+  MODULE_TRANSLATION_CACHE.clear();
+  MODULE_TRANSLATION_LOAD = null;
+}
+
 Hooks.once("init", () => {
+  game.settings.register(MODULE_ID, UI_LANGUAGE_SETTING, {
+    scope: "client",
+    config: true,
+    name: game.i18n.localize("SIPD.Settings.Language.Label"),
+    hint: game.i18n.localize("SIPD.Settings.Language.Hint"),
+    type: String,
+    choices: {
+      default: game.i18n.localize("SIPD.Language.Default"),
+      de: game.i18n.localize("SIPD.Language.De"),
+      en: game.i18n.localize("SIPD.Language.En")
+    },
+    default: "default",
+    onChange: () => {
+      void ensureModuleTranslationsLoaded().then(() => refreshLocalizedUi());
+    }
+  });
+
   game.settings.register(MODULE_ID, ENABLE_PASTE_SETTING, {
     name: localize("SIPD.Settings.EnablePaste.Label"),
     hint: localize("SIPD.Settings.EnablePaste.Hint"),
@@ -174,6 +268,7 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", () => {
+  void ensureModuleTranslationsLoaded();
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
   document.addEventListener("drop", onDrop, true);
@@ -1252,6 +1347,8 @@ function openImagePreview(path, name, {revokeOnClose=null}={}) {
 }
 
 function localize(key, formatters) {
+  const override = MODULE_TRANSLATION_CACHE.get(getModuleLanguage())?.[key];
+  if ( override ) return formatters ? interpolateTemplate(override, formatters) : override;
   return formatters ? game.i18n.format(key, formatters) : game.i18n.localize(key);
 }
 
@@ -1273,9 +1370,11 @@ export const __test__ = {
   DEFAULT_UPLOAD_DIRECTORY_SETTING,
   UPLOAD_DIRECTORY_HISTORY_SETTING,
   ALLOW_PLAYER_TOOL_SETTING,
+  UI_LANGUAGE_SETTING,
   UI_THEME_SETTING,
   WINDOW_STATE_SETTING,
   WORLD_STORAGE_ROOT,
+  SUPPORTED_UI_LANGUAGES,
   UI_THEMES,
   WINDOW_KEYS,
   ACTIONS,
@@ -1283,6 +1382,12 @@ export const __test__ = {
   getAllActionChoices,
   getActionSettingChoices,
   getThemeSettingChoices,
+  normalizeUiLanguage,
+  getPreferredLanguage,
+  getModuleLanguage,
+  ensureModuleTranslationsLoaded,
+  refreshLocalizedUi,
+  resetModuleTranslations,
   onPaste,
   onDragOver,
   onDrop,

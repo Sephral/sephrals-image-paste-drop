@@ -69,6 +69,7 @@ function createDialogForm() {
 
 test.beforeEach(() => {
   env.reset();
+  __test__.resetModuleTranslations();
 });
 
 test.after(() => {
@@ -77,7 +78,13 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 13);
+  assert.equal(env.state.registerCalls.length, 14);
+  const languageSetting = env.state.registerCalls.find((entry) => entry.key === __test__.UI_LANGUAGE_SETTING);
+  assert.deepEqual(languageSetting.data.choices, {
+    default: "Follow Foundry",
+    de: "Deutsch",
+    en: "English"
+  });
   const defaultAction = env.state.registerCalls.find((entry) => entry.key === __test__.DEFAULT_ACTION_SETTING);
   assert.equal(defaultAction.data.default, __test__.ACTIONS.SCENE_BACKGROUND_CURRENT);
   assert.equal(defaultAction.data.choices[__test__.ACTIONS.PREVIEW_ONLY], "Preview Only");
@@ -95,6 +102,61 @@ test("action and theme choice helpers expose localized maps", () => {
   assert.equal(__test__.getThemeSettingChoices()[__test__.UI_THEMES.FOUNDRY], "Foundry");
   assert.equal(__test__.localize("SIPD.Notification.Uploaded", { path: "abc" }), "uploaded abc");
   assert.equal(__test__.escapeHtml('<x>'), "&lt;x&gt;");
+});
+
+test("language helpers load overrides and refresh open SIPD dialogs", async () => {
+  await env.hooks.trigger("init");
+
+  env.state.fetchImpl = async (url) => ({
+    ok: true,
+    async json() {
+      const language = /\/(en|de)\.json$/.exec(String(url))?.[1];
+      if ( language === "de" ) {
+        return {
+          "SIPD.Dialog.Title": "Bild einfügen",
+          "SIPD.Action.PreviewOnly": "Nur Vorschau"
+        };
+      }
+
+      return {
+        "SIPD.Dialog.Title": "Dialog Title",
+        "SIPD.Action.PreviewOnly": "Preview Only"
+      };
+    }
+  });
+
+  assert.equal(__test__.normalizeUiLanguage("de-DE"), "de");
+  assert.equal(__test__.normalizeUiLanguage("en_US"), "en");
+  assert.equal(__test__.normalizeUiLanguage("fr"), "en");
+
+  env.game.i18n.lang = "de-DE";
+  env.state.settingsValues.set("sephrals-image-paste-drop.uiLanguage", "default");
+  assert.equal(__test__.getModuleLanguage(), "de");
+
+  env.state.settingsValues.set("sephrals-image-paste-drop.uiLanguage", "en");
+  assert.equal(__test__.getModuleLanguage(), "en");
+
+  const appElement = new TestHTMLElement();
+  appElement.classList.add("sipd-app");
+  const dialogApp = {
+    element: appElement,
+    options: { window: { title: "Dialog Title" } },
+    renderCalls: [],
+    render(force) {
+      this.renderCalls.push(force);
+    }
+  };
+  globalThis.ui.windows = { dialogApp };
+
+  const languageSetting = env.state.registerCalls.find((entry) => entry.key === __test__.UI_LANGUAGE_SETTING);
+  env.state.settingsValues.set("sephrals-image-paste-drop.uiLanguage", "de");
+  languageSetting.data.onChange("de");
+  await flushPromises();
+
+  assert.equal(dialogApp.options.window.title, "Bild einfügen");
+  assert.deepEqual(dialogApp.renderCalls, [true]);
+  assert.equal(__test__.localize("SIPD.Dialog.Title"), "Bild einfügen");
+  assert.equal(__test__.getActionSettingChoices()[__test__.ACTIONS.PREVIEW_ONLY], "Nur Vorschau");
 });
 
 test("paste, dragover, and drop handlers cover gatekeeping, success, and error paths", async () => {

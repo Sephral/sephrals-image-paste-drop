@@ -151,7 +151,7 @@ export function createTestEnvironment() {
     journalCreates: [],
     imageBehavior: { width: 320, height: 200, error: false },
     resizeObservers: [],
-    fetchImpl: async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) }),
+    fetchImpl: async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }), json: async () => ({}) }),
     now: 1710000000000,
     gm: true,
     allowPlayerToolUse: false,
@@ -283,6 +283,7 @@ export function createTestEnvironment() {
     ready: state.ready,
     world: state.world,
     i18n: {
+      lang: "en",
       localize(key) {
         return state.localizations.get(key) ?? key;
       },
@@ -319,6 +320,7 @@ export function createTestEnvironment() {
   };
 
   const ui = {
+    windows: {},
     notifications: {
       info(message) {
         state.notifications.info.push(message);
@@ -449,6 +451,11 @@ export function createTestEnvironment() {
     ["SIPD.Dialog.ActivateHint", "Activate Hint"],
     ["SIPD.Dialog.Navigation", "Navigation"],
     ["SIPD.Dialog.NavigationHint", "Navigation Hint"],
+    ["SIPD.Settings.Language.Label", "Language"],
+    ["SIPD.Settings.Language.Hint", "Language hint"],
+    ["SIPD.Language.Default", "Follow Foundry"],
+    ["SIPD.Language.De", "Deutsch"],
+    ["SIPD.Language.En", "English"],
     ["SIPD.Settings.Theme.OptionSignature", "Signature"],
     ["SIPD.Settings.Theme.OptionFoundry", "Foundry"]
   ]);
@@ -476,7 +483,7 @@ export function createTestEnvironment() {
     state.journalCreates = [];
     state.imageBehavior = { width: 320, height: 200, error: false };
     state.resizeObservers = [];
-    state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) });
+    state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }), json: async () => ({}) });
     state.now = 1710000000000;
     state.gm = true;
     state.allowPlayerToolUse = false;
@@ -488,8 +495,10 @@ export function createTestEnvironment() {
     game.world = state.world;
     canvas.ready = false;
     canvas.scene = null;
+    ui.windows = {};
     state.settingsValues.set("sephrals-image-paste-drop.enablePasteImport", true);
     state.settingsValues.set("sephrals-image-paste-drop.enableDropImport", true);
+    state.settingsValues.set("sephrals-image-paste-drop.uiLanguage", "default");
     state.settingsValues.set("sephrals-image-paste-drop.defaultAction", "scene-background-current");
     state.settingsValues.set("sephrals-image-paste-drop.rememberLastAction", true);
     state.settingsValues.set("sephrals-image-paste-drop.lastAction", "scene-background-current");
@@ -501,6 +510,7 @@ export function createTestEnvironment() {
     state.settingsValues.set("sephrals-image-paste-drop.allowPlayerToolUse", false);
     state.settingsValues.set("sephrals-image-paste-drop.uiTheme", "signature");
     state.settingsValues.set("sephrals-image-paste-drop.windowState", {});
+    game.i18n.lang = "en";
   };
 
   reset();
