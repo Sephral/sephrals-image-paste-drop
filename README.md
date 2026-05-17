@@ -2,6 +2,12 @@
 
 Sephral's Image Paste & Drop lets you paste images from the clipboard with `Ctrl+V` or drag and drop image content into Foundry and decide what should happen next.
 
+## Discord
+
+[![Join Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/7BjCgDYaBP)
+
+Questions, feedback, and module support are welcome on [Discord](https://discord.gg/7BjCgDYaBP).
+
 ## Demo
 
 ![SCBR demo](media/demo.gif)
