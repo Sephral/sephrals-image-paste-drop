@@ -440,12 +440,12 @@ async function handleImportedImage(file) {
 
   try {
     const dimensions = await readImageDimensions(objectUrl);
-    const decision = await promptForAction({
+    const decision = normalizeActionDecision(await promptForAction({
       previewUrl: objectUrl,
       defaultName: defaultDocumentName(),
       width: dimensions.width,
       height: dimensions.height
-    });
+    }));
 
     if ( !decision ) return;
 
@@ -482,6 +482,23 @@ async function handleImportedImage(file) {
 
 function requiresPersistentPath(action, shareToPlayers) {
   return shareToPlayers || (action !== ACTIONS.PREVIEW_ONLY);
+}
+
+function normalizeActionDecision(decision) {
+  if ( !decision ) return null;
+
+  const allowedActions = new Set(getPermittedActions());
+  const action = allowedActions.has(decision.action) ? decision.action : ACTIONS.PREVIEW_ONLY;
+  const behavior = getActionBehavior(action);
+
+  return {
+    name: String(decision.name ?? "").trim() || defaultDocumentName(),
+    action,
+    uploadDirectory: normalizeUploadDirectory(decision.uploadDirectory),
+    shareToPlayers: behavior.supportsShareToPlayers && Boolean(decision.shareToPlayers),
+    activateScene: behavior.supportsActivateScene && Boolean(decision.activateScene),
+    navigation: behavior.supportsNavigation && Boolean(decision.navigation)
+  };
 }
 
 function defaultUploadDirectory() {
@@ -1402,6 +1419,7 @@ export const __test__ = {
   getPermittedActions,
   handleImportedImage,
   requiresPersistentPath,
+  normalizeActionDecision,
   defaultUploadDirectory,
   getWorldStorageRoot,
   getRootedStoragePath,

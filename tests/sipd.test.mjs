@@ -313,6 +313,22 @@ test("user access, directory, and naming helpers normalize values and permission
   assert.equal(__test__.canCurrentUserUseTool(), true);
   assert.deepEqual(__test__.getPermittedActions(), __test__.PLAYER_ALLOWED_ACTIONS);
 
+  assert.deepEqual(__test__.normalizeActionDecision({
+    name: " Preview ",
+    action: __test__.ACTIONS.PREVIEW_ONLY,
+    uploadDirectory: "custom",
+    shareToPlayers: true,
+    activateScene: true,
+    navigation: true
+  }), {
+    name: "Preview",
+    action: __test__.ACTIONS.PREVIEW_ONLY,
+    uploadDirectory: "custom",
+    shareToPlayers: false,
+    activateScene: false,
+    navigation: false
+  });
+
   assert.equal(__test__.requiresPersistentPath(__test__.ACTIONS.PREVIEW_ONLY, false), false);
   assert.equal(__test__.requiresPersistentPath(__test__.ACTIONS.SHARE_IMAGE, false), true);
   assert.match(__test__.defaultUploadDirectory(), /^clipboard-images\/\d{4}\/\d{2}$/);
@@ -607,6 +623,22 @@ test("handleImportedImage covers cancel, remembered action, reusable upload, and
   env.state.dialogWaitResult = null;
   await __test__.handleImportedImage(file);
   assert.equal(env.state.revokedUrls.includes("blob:1"), true);
+
+  env.reset();
+  env.state.gm = false;
+  env.state.filesUploadPermission = false;
+  env.state.settingsValues.set(`sephrals-image-paste-drop.${__test__.ALLOW_PLAYER_TOOL_SETTING}`, true);
+  env.state.dialogWaitResult = {
+    name: "Player Preview",
+    action: __test__.ACTIONS.PREVIEW_ONLY,
+    uploadDirectory: "custom",
+    shareToPlayers: true,
+    activateScene: true,
+    navigation: true
+  };
+  await __test__.handleImportedImage(file);
+  assert.equal(env.state.uploadCalls.length, 0);
+  assert.equal(env.state.imagePopouts.length, 1);
 
   env.reset();
   env.canvas.ready = true;
