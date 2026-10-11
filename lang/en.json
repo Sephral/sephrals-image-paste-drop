@@ -1,6 +1,8 @@
 {
   "SIPD.Settings.AllowPlayerToolUse.Label": "Allow players to use SIPD",
   "SIPD.Settings.AllowPlayerToolUse.Hint": "When enabled, non-GM users can open the import dialog and always use the preview. Further targets are set under \"Additional player targets\". By default only the GM can use the tool.",
+  "SIPD.Settings.StorageFolder.Label": "Storage folder",
+  "SIPD.Settings.StorageFolder.Hint": "Base folder for all images SIPD stores. Leave it empty to use the default: the world folder, or a folder in your Assets Library on The Forge. Example: assets/handouts",
   "SIPD.Settings.PlayerActions.Label": "Additional player targets",
   "SIPD.Settings.PlayerActions.Hint": "Targets players may use besides the preview. Players also need the Foundry permission \"Upload Files\", and \"Create Journal Entries\" for journal images. Their files go to clipboard-images/players and clipboard-images/shared; a GM client creates these folders. Scene and tile targets always require a GM.",
   "SIPD.Settings.Language.Label": "Language",

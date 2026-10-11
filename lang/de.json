@@ -1,6 +1,8 @@
 {
   "SIPD.Settings.AllowPlayerToolUse.Label": "Spielern die Nutzung von SIPD erlauben",
   "SIPD.Settings.AllowPlayerToolUse.Hint": "Wenn aktiv, können Nicht-GMs den Import-Dialog öffnen und immer die Vorschau nutzen. Weitere Ziele werden unter „Zusätzliche Ziele für Spieler“ festgelegt. Standardmäßig kann nur der GM das Tool verwenden.",
+  "SIPD.Settings.StorageFolder.Label": "Speicherordner",
+  "SIPD.Settings.StorageFolder.Hint": "Basisordner für alle Bilder, die SIPD speichert. Leer lassen für den Standard: den Weltordner, auf The Forge einen Ordner in deiner Assets Library. Beispiel: assets/handouts",
   "SIPD.Settings.PlayerActions.Label": "Zusätzliche Ziele für Spieler",
   "SIPD.Settings.PlayerActions.Hint": "Ziele, die Spieler zusätzlich zur Vorschau nutzen dürfen. Spieler brauchen außerdem die Foundry-Berechtigung „Dateien hochladen“ und für Journal-Bilder „Journaleinträge erstellen“. Ihre Dateien landen in clipboard-images/players und clipboard-images/shared; diese Ordner legt ein GM-Client an. Szenen- und Tile-Ziele erfordern immer einen GM.",
   "SIPD.Settings.Language.Label": "Sprache",

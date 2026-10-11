@@ -2,10 +2,10 @@
   "id": "sephrals-image-paste-drop",
   "title": "Sephral's Image Paste & Drop",
   "description": "Paste clipboard images into Foundry and decide whether they become a new scene background, a scene tile, a journal image, or a player-facing image share.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "compatibility": {
     "minimum": 13,
-    "verified": "14.361"
+    "verified": "14.369"
   },
   "authors": [
     {

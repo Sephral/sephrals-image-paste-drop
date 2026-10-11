@@ -78,7 +78,10 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 15);
+  assert.equal(env.state.registerCalls.length, 16);
+  const storageFolder = env.state.registerCalls.find((entry) => entry.key === __test__.STORAGE_FOLDER_SETTING);
+  assert.equal(storageFolder.data.scope, "world");
+  assert.equal(storageFolder.data.default, "");
   const playerActions = env.state.registerCalls.find((entry) => entry.key === __test__.PLAYER_ACTIONS_SETTING);
   assert.equal(playerActions.data.scope, "world");
   assert.deepEqual(playerActions.data.default, []);
@@ -833,4 +836,66 @@ test("dragover leaves images alone for users who may not use the tool", () => {
   __test__.onDragOver(dragEvent);
   assert.equal(dragEvent.prevented, undefined);
   assert.equal(dragEvent.dataTransfer.dropEffect, "");
+});
+
+test("Follow Foundry uses Foundry's translation for languages the module does not bundle", async () => {
+  env.state.fetchImpl = async (url) => ({
+    ok: true,
+    async json() {
+      return /\/de\.json$/.test(String(url)) ? { "SIPD.Dialog.Title": "Bild einfügen" } : { "SIPD.Dialog.Title": "Dialog Title" };
+    }
+  });
+  await __test__.ensureModuleTranslationsLoaded();
+  env.game.i18n.lang = "fr";
+  env.state.localizations.set("SIPD.Dialog.Title", "Insérer une image");
+  setSetting(__test__.UI_LANGUAGE_SETTING, "default");
+  assert.equal(__test__.getOverrideLanguage(), null);
+  assert.equal(__test__.localize("SIPD.Dialog.Title"), "Insérer une image");
+
+  setSetting(__test__.UI_LANGUAGE_SETTING, "de");
+  assert.equal(__test__.localize("SIPD.Dialog.Title"), "Bild einfügen");
+});
+
+test("The Forge stores images in the Assets Library and matches absolute asset URLs", async () => {
+  globalThis.ForgeVTT = { usingTheForge: true, ASSETS_LIBRARY_URL_PREFIX: "https://assets.forge-vtt.com/" };
+  try {
+    assert.equal(__test__.isForge(), true);
+    assert.equal(__test__.getStorageSource(), "forgevtt");
+    assert.equal(__test__.getWorldStorageRoot(), "sephrals-image-paste-drop/world-id");
+
+    const root = "sephrals-image-paste-drop/world-id/custom";
+    env.state.uploadResponse = { path: `https://assets.forge-vtt.com/user123/${root}/new.png` };
+    const uploaded = await __test__.uploadClipboardFile(createImageFile("image.png"), { directory: "custom" });
+    assert.equal(uploaded, env.state.uploadResponse.path);
+    assert.deepEqual(env.state.createDirectoryCalls.map((entry) => [entry.source, entry.target]), [["forgevtt", root]]);
+    assert.equal(env.state.browseCalls[0].source, "forgevtt");
+    assert.equal(env.state.uploadCalls[0].source, "forgevtt");
+    assert.equal(env.state.uploadCalls[0].target, root);
+
+    const hashed = await __test__.buildContentAddressedUploadFileName(createImageFile("image.png"));
+    env.state.browseResponse = { files: [`https://assets.forge-vtt.com/user123/${root}/${hashed}`] };
+    const reused = await __test__.uploadClipboardFile(createImageFile("image.png"), { directory: "custom" });
+    assert.equal(reused, `https://assets.forge-vtt.com/user123/${root}/${hashed}`);
+    assert.equal(env.state.uploadCalls.length, 1);
+
+    env.state.createDirectoryErrors.set(root, new Error("forge says no"));
+    await __test__.ensureDirectoryExists(foundry.applications.apps.FilePicker.implementation, root);
+  } finally {
+    delete globalThis.ForgeVTT;
+  }
+  assert.equal(__test__.getStorageSource(), "data");
+});
+
+test("a configured storage folder replaces the default root everywhere", async () => {
+  setSetting(__test__.STORAGE_FOLDER_SETTING, " /assets/handouts/ ");
+  assert.equal(__test__.getConfiguredStorageFolder(), "assets/handouts");
+  assert.equal(__test__.getWorldStorageRoot(), "assets/handouts");
+  assert.equal(__test__.getRootedStoragePath("clipboard-images/players"), "assets/handouts/clipboard-images/players");
+  assert.equal(__test__.normalizeUploadDirectory("assets/handouts/maps"), "maps");
+
+  env.state.uploadResponse = { path: "assets/handouts/maps/x.png" };
+  await __test__.uploadClipboardFile(createImageFile("image.png"), { directory: "maps" });
+  assert.equal(env.state.uploadCalls[0].source, "data");
+  assert.equal(env.state.uploadCalls[0].target, "assets/handouts/maps");
+  assert.deepEqual(env.state.createDirectoryCalls.map((entry) => entry.target), ["assets", "assets/handouts", "assets/handouts/maps"]);
 });

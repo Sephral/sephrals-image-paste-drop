@@ -12,6 +12,7 @@ const DEFAULT_UPLOAD_DIRECTORY_SETTING = "defaultUploadDirectory";
 const UPLOAD_DIRECTORY_HISTORY_SETTING = "uploadDirectoryHistory";
 const ALLOW_PLAYER_TOOL_SETTING = "allowPlayerToolUse";
 const PLAYER_ACTIONS_SETTING = "playerAllowedActions";
+const STORAGE_FOLDER_SETTING = "storageFolder";
 const UI_LANGUAGE_SETTING = "uiLanguage";
 const UI_THEME_SETTING = "uiTheme";
 const WINDOW_STATE_SETTING = "windowState";
@@ -111,6 +112,12 @@ function getPreferredLanguage() {
 function getModuleLanguage(preferredLanguage = getPreferredLanguage()) {
   if ( SUPPORTED_UI_LANGUAGES.includes(preferredLanguage) ) return preferredLanguage;
   return normalizeUiLanguage(game.i18n?.lang);
+}
+
+// Bundled translations only override Foundry's own when a language was picked explicitly,
+// so "Follow Foundry" keeps community translations from game.i18n.
+function getOverrideLanguage(preferredLanguage = getPreferredLanguage()) {
+  return SUPPORTED_UI_LANGUAGES.includes(preferredLanguage) ? preferredLanguage : null;
 }
 
 async function loadModuleTranslations(language) {
@@ -274,6 +281,18 @@ Hooks.once("init", () => {
     hint: localize("SIPD.Settings.PlayerActions.Hint"),
     type: new SetField(new StringField({required: true, blank: false, choices: getPlayerActionSettingChoices()})),
     default: [],
+    onChange: () => {
+      void ensurePlayerStorageDirectories();
+    }
+  });
+
+  game.settings.register(MODULE_ID, STORAGE_FOLDER_SETTING, {
+    scope: "world",
+    config: true,
+    name: localize("SIPD.Settings.StorageFolder.Label"),
+    hint: localize("SIPD.Settings.StorageFolder.Hint"),
+    type: String,
+    default: "",
     onChange: () => {
       void ensurePlayerStorageDirectories();
     }
@@ -568,8 +587,27 @@ function defaultUploadDirectory() {
   return `${STORAGE_ROOT}/${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function isForge() {
+  // The Forge may declare ForgeVTT as a top-level class, which is global but not a globalThis property.
+  return typeof ForgeVTT !== "undefined" && ForgeVTT?.usingTheForge === true;
+}
+
+// The Forge keeps uploads in the user's Assets Library; the world folder is not available there.
+function getStorageSource() {
+  return isForge() ? "forgevtt" : "data";
+}
+
+function getConfiguredStorageFolder() {
+  return String(getRegisteredSettingValue(STORAGE_FOLDER_SETTING, "") ?? "")
+    .replace(/\\/g, "/")
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
+}
+
 function getWorldStorageRoot() {
-  return `worlds/${game.world.id}/${WORLD_STORAGE_ROOT}`;
+  const configured = getConfiguredStorageFolder();
+  if ( configured ) return configured;
+  return isForge() ? `${WORLD_STORAGE_ROOT}/${game.world.id}` : `worlds/${game.world.id}/${WORLD_STORAGE_ROOT}`;
 }
 
 function getRootedStoragePath(path="") {
@@ -1161,7 +1199,7 @@ async function uploadClipboardFile(file, {directory=null, targetPath=null}={}) {
     if ( existingPath ) return existingPath;
   }
 
-  const response = await filePicker.upload("data", target, uploadFile, {}, {notify: false});
+  const response = await filePicker.upload(getStorageSource(), target, uploadFile, {}, {notify: false});
   if ( !response?.path ) {
     throw new Error(localize(isGM ? "SIPD.Error.UploadFailed" : "SIPD.Error.PlayerUploadFailed"));
   }
@@ -1175,12 +1213,16 @@ function getFilePickerClass() {
 async function findExistingFilePath(filePicker, target, fileName) {
   let response;
   try {
-    response = await filePicker.browse("data", target, {wildcard: false});
+    response = await filePicker.browse(getStorageSource(), target, {wildcard: false});
   } catch (_error) {
     return null;
   }
+  // The Forge returns absolute asset URLs, so a stored file may only match by its ending.
   const expectedPath = `${target}/${fileName}`.replace(/\\/g, "/");
-  return response?.files?.find(path => String(path).replace(/\\/g, "/") === expectedPath) ?? null;
+  return response?.files?.find(path => {
+    const normalized = String(path).replace(/\\/g, "/");
+    return normalized === expectedPath || normalized.endsWith(`/${expectedPath}`);
+  }) ?? null;
 }
 
 async function ensurePlayerStorageDirectories() {
@@ -1198,6 +1240,14 @@ async function ensurePlayerStorageDirectories() {
 }
 
 async function ensureDirectoryExists(filePicker, target) {
+  // The Forge creates every nested folder in one call (and uploads create missing folders, too).
+  if ( getStorageSource() === "forgevtt" ) {
+    try {
+      await filePicker.createDirectory("forgevtt", target, {notify: false});
+    } catch (_error) {}
+    return;
+  }
+
   const segments = target.split("/").filter(Boolean);
   let currentPath = "";
 
@@ -1458,7 +1508,8 @@ function openImagePreview(path, name, {revokeOnClose=null}={}) {
 }
 
 function localize(key, formatters) {
-  const override = MODULE_TRANSLATION_CACHE.get(getModuleLanguage())?.[key];
+  const overrideLanguage = getOverrideLanguage();
+  const override = overrideLanguage ? MODULE_TRANSLATION_CACHE.get(overrideLanguage)?.[key] : null;
   if ( override ) return formatters ? interpolateTemplate(override, formatters) : override;
   return formatters ? game.i18n.format(key, formatters) : game.i18n.localize(key);
 }
@@ -1482,6 +1533,7 @@ export const __test__ = {
   UPLOAD_DIRECTORY_HISTORY_SETTING,
   ALLOW_PLAYER_TOOL_SETTING,
   PLAYER_ACTIONS_SETTING,
+  STORAGE_FOLDER_SETTING,
   UI_LANGUAGE_SETTING,
   UI_THEME_SETTING,
   WINDOW_STATE_SETTING,
@@ -1500,6 +1552,7 @@ export const __test__ = {
   normalizeUiLanguage,
   getPreferredLanguage,
   getModuleLanguage,
+  getOverrideLanguage,
   ensureModuleTranslationsLoaded,
   refreshLocalizedUi,
   resetModuleTranslations,
@@ -1522,6 +1575,9 @@ export const __test__ = {
   requiresPersistentPath,
   normalizeActionDecision,
   defaultUploadDirectory,
+  isForge,
+  getStorageSource,
+  getConfiguredStorageFolder,
   getWorldStorageRoot,
   getRootedStoragePath,
   normalizeUploadDirectory,

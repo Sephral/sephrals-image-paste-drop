@@ -51,6 +51,12 @@ The module writes image files only when the selected action needs a stable Found
 
 Other persistent actions such as creating a new scene, tile, or journal entry also upload a file and then reference that file from the created Foundry document.
 
+The world setting `Storage folder` replaces the base folder `worlds/<world-id>/sephrals-image-paste-drop` with any folder of your choice (for example `assets/handouts`). All paths above then start there.
+
+### The Forge
+
+On The Forge the world folder is not available for uploads. SIPD detects The Forge and stores its images in your Assets Library under `sephrals-image-paste-drop/<world-id>/...` (or under the configured `Storage folder`). Documents reference the absolute Assets Library URL that The Forge returns.
+
 For non-deterministic persistent uploads, SIPD names the stored file by a SHA-256 hash of the image content. That avoids filename collisions when several dropped or pasted files share the same original filename, and it reuses the same world file path when the content is identical.
 
 `Preview only` does not write a persistent file unless the image is also shared to players. In preview mode the module uses a temporary browser object URL instead.
