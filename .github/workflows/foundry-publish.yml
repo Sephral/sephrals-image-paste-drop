@@ -1,0 +1,54 @@
+name: Publish on Foundry VTT
+
+# Registers an existing GitHub release as a new version on foundryvtt.com.
+# New releases do this automatically in "Create Release"; use this workflow to
+# catch up on older releases or to retry after a failure.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, for example v1.0.2"
+        required: true
+      dry_run:
+        description: "Only validate on foundryvtt.com, do not create the version"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Read module.json of the release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must look like v1.2.3, got: $TAG" >&2
+            exit 1
+          fi
+          git show "refs/tags/$TAG:module.json" > "$RUNNER_TEMP/module.json"
+
+      - name: Publish release on foundryvtt.com
+        env:
+          FOUNDRY_RELEASE_TOKEN: ${{ secrets.FOUNDRY_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          FOUNDRY_DRY_RUN: ${{ inputs.dry_run }}
+          FOUNDRY_MANIFEST_PATH: ${{ runner.temp }}/module.json
+          FOUNDRY_REQUIRE_TOKEN: "true"
+        run: node build/publish-foundry-release.mjs
