@@ -36,6 +36,7 @@ SIPD currently uses two storage layers:
 
 - Persistent image files are stored under world data at `worlds/<world-id>/sephrals-image-paste-drop/...`
 - User preferences are stored as client settings under the module id `sephrals-image-paste-drop`
+- Player access (`allowPlayerToolUse`, `playerAllowedActions`) is stored as world settings
 
 ### Persistent file paths
 
@@ -46,6 +47,7 @@ The module writes image files only when the selected action needs a stable Found
 - Replace current scene background: `worlds/<world-id>/sephrals-image-paste-drop/clipboard-images/scenes/<scene-id>/background.<ext>`
 - Replace current scene foreground: `worlds/<world-id>/sephrals-image-paste-drop/clipboard-images/scenes/<scene-id>/foreground.<ext>`
 - `Share image`: `worlds/<world-id>/sephrals-image-paste-drop/clipboard-images/shared/shared-<user-id>.<ext>`
+- Uploads by players (`Upload directory`, journal entries): `worlds/<world-id>/sephrals-image-paste-drop/clipboard-images/players/`
 
 Other persistent actions such as creating a new scene, tile, or journal entry also upload a file and then reference that file from the created Foundry document.
 
@@ -86,9 +88,23 @@ The current mitigation strategy is:
 
 By default only the GM can use SIPD.
 
-The GM can enable a restricted player mode in the SIPD settings.
+The GM can enable player access in the SIPD settings (`Allow players to use SIPD`). Players can then open the import flow and always use `Preview only`.
 
-In restricted player mode, non GM users can open the import flow but are limited to `Preview only`. They cannot create scenes, tiles, journal entries, uploads, or player facing broadcasts through SIPD.
+Under `Additional player targets` the GM can open up more targets for players:
+
+| Target | Additional Foundry permission the player needs |
+| --- | --- |
+| `Upload directory` | Upload Files |
+| Journal entry with an image page | Upload Files and Create Journal Entries |
+| `Share image` (also the "show to players" checkbox) | Upload Files |
+
+Foundry grants "Upload Files" only to Assistant GMs by default. Grant it to Players or Trusted Players under **Configure Permissions**. Assistant GM is no alternative when players should not see hidden journals and actors, because Foundry treats Assistant GMs like GMs.
+
+Players always upload into `clipboard-images/players` (shared images into `clipboard-images/shared`) and cannot pick a folder, because Foundry does not let players create folders. A GM client creates both folders when player access or a player target is enabled and whenever a GM logs in.
+
+Scene and tile targets stay GM-only, because Foundry requires the Assistant role to create scenes and tiles.
+
+Note that "Upload Files" lets a player upload files into any existing folder of the Data directory, not only into the SIPD folders.
 
 ## Settings
 
@@ -110,5 +126,5 @@ It lets each user configure:
 - Clipboard import currently targets image clipboard items.
 - Drag and drop currently supports image files and dropped image URLs that can be fetched by the browser.
 - The current scene foreground target is useful for map overlays and framing assets.
-- Uploading requires the Foundry file upload permission.
+- Uploading requires the Foundry permission "Upload Files". GMs and Assistant GMs have it by default.
 - Tile insertion requires an active viewed scene.

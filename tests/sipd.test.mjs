@@ -78,7 +78,11 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 14);
+  assert.equal(env.state.registerCalls.length, 15);
+  const playerActions = env.state.registerCalls.find((entry) => entry.key === __test__.PLAYER_ACTIONS_SETTING);
+  assert.equal(playerActions.data.scope, "world");
+  assert.deepEqual(playerActions.data.default, []);
+  assert.deepEqual(Object.keys(playerActions.data.type.element.options.choices), [...__test__.PLAYER_SELECTABLE_ACTIONS]);
   const languageSetting = env.state.registerCalls.find((entry) => entry.key === __test__.UI_LANGUAGE_SETTING);
   assert.deepEqual(languageSetting.data.choices, {
     default: "Follow Foundry",
@@ -311,7 +315,7 @@ test("user access, directory, and naming helpers normalize values and permission
   assert.equal(__test__.canCurrentUserUseTool(), false);
   env.state.settingsValues.set(`sephrals-image-paste-drop.${__test__.ALLOW_PLAYER_TOOL_SETTING}`, true);
   assert.equal(__test__.canCurrentUserUseTool(), true);
-  assert.deepEqual(__test__.getPermittedActions(), __test__.PLAYER_ALLOWED_ACTIONS);
+  assert.deepEqual(__test__.getPermittedActions(), [__test__.ACTIONS.PREVIEW_ONLY]);
 
   assert.deepEqual(__test__.normalizeActionDecision({
     name: " Preview ",
@@ -323,7 +327,7 @@ test("user access, directory, and naming helpers normalize values and permission
   }), {
     name: "Preview",
     action: __test__.ACTIONS.PREVIEW_ONLY,
-    uploadDirectory: "custom",
+    uploadDirectory: __test__.PLAYER_UPLOAD_DIRECTORY,
     shareToPlayers: false,
     activateScene: false,
     navigation: false
@@ -669,4 +673,164 @@ test("handleImportedImage covers cancel, remembered action, reusable upload, and
   await __test__.handleImportedImage(file);
   assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.LAST_ACTION_SETTING), true);
   assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.DEFAULT_UPLOAD_DIRECTORY_SETTING), true);
+});
+
+function setSetting(key, value) {
+  env.state.settingsValues.set(`sephrals-image-paste-drop.${key}`, value);
+}
+
+function enablePlayerTargets(...actions) {
+  env.state.gm = false;
+  env.state.userId = "player-user";
+  setSetting(__test__.ALLOW_PLAYER_TOOL_SETTING, true);
+  setSetting(__test__.PLAYER_ACTIONS_SETTING, new Set(actions));
+}
+
+const PLAYER_FOLDER = "worlds/world-id/sephrals-image-paste-drop/clipboard-images/players";
+
+test("player targets need the GM whitelist and the matching Foundry permissions", () => {
+  const { ACTIONS } = __test__;
+  env.state.gm = false;
+  assert.deepEqual(__test__.getPermittedActions(), []);
+
+  enablePlayerTargets(...__test__.PLAYER_SELECTABLE_ACTIONS, ACTIONS.SCENE_BACKGROUND, "bogus");
+  assert.deepEqual([...__test__.getPlayerActionWhitelist()], [...__test__.PLAYER_SELECTABLE_ACTIONS]);
+
+  env.state.filesUploadPermission = false;
+  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.PREVIEW_ONLY]);
+  assert.equal(__test__.canUserShareImages(), false);
+
+  env.state.filesUploadPermission = true;
+  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY]);
+  env.state.permissions.JOURNAL_CREATE = true;
+  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY]);
+  assert.equal(__test__.canUserPerformAction(ACTIONS.SCENE_BACKGROUND), false);
+  assert.equal(__test__.canUserPerformAction(ACTIONS.TILE_FIT), false);
+
+  setSetting(__test__.PLAYER_ACTIONS_SETTING, [ACTIONS.JOURNAL_IMAGE]);
+  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ACTIONS.PREVIEW_ONLY]);
+
+  const journalDecision = __test__.normalizeActionDecision({ name: "Clip", action: ACTIONS.JOURNAL_IMAGE, uploadDirectory: "custom", shareToPlayers: true });
+  assert.equal(journalDecision.action, ACTIONS.JOURNAL_IMAGE);
+  assert.equal(journalDecision.uploadDirectory, __test__.PLAYER_UPLOAD_DIRECTORY);
+  assert.equal(journalDecision.shareToPlayers, false);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TILE_FIT }).action, ACTIONS.PREVIEW_ONLY);
+
+  setSetting(__test__.PLAYER_ACTIONS_SETTING, new Set([ACTIONS.JOURNAL_IMAGE, ACTIONS.SHARE_IMAGE]));
+  assert.equal(__test__.normalizeActionDecision({ name: "Clip", action: ACTIONS.JOURNAL_IMAGE, shareToPlayers: true }).shareToPlayers, true);
+});
+
+test("player uploads go into the prepared folder without creating directories", async () => {
+  enablePlayerTargets(__test__.ACTIONS.UPLOAD_DIRECTORY);
+  env.state.uploadResponse = { path: `${PLAYER_FOLDER}/hash.png` };
+
+  assert.equal(await __test__.uploadClipboardFile(createImageFile("image.png"), { directory: "custom" }), `${PLAYER_FOLDER}/hash.png`);
+  assert.equal(env.state.createDirectoryCalls.length, 0);
+  assert.equal(env.state.browseCalls.length, 0);
+  assert.equal(env.state.uploadCalls[0].target, PLAYER_FOLDER);
+
+  env.state.permissions.FILES_BROWSE = true;
+  await __test__.uploadClipboardFile(createImageFile("image.png"));
+  assert.equal(env.state.browseCalls.length, 1);
+
+  env.state.uploadResponse = false;
+  await assert.rejects(() => __test__.uploadClipboardFile(createImageFile("image.png")), /player upload failed/);
+
+  const failingPicker = { async browse() { throw new Error("no browse permission"); } };
+  assert.equal(await __test__.findExistingFilePath(failingPicker, "target", "file.png"), null);
+});
+
+test("GM clients prepare the player folders once a player target is enabled", async () => {
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+
+  try {
+    await env.hooks.trigger("init");
+    await __test__.ensurePlayerStorageDirectories();
+    setSetting(__test__.ALLOW_PLAYER_TOOL_SETTING, true);
+    await __test__.ensurePlayerStorageDirectories();
+    assert.equal(env.state.createDirectoryCalls.length, 0);
+
+    setSetting(__test__.PLAYER_ACTIONS_SETTING, new Set([__test__.ACTIONS.UPLOAD_DIRECTORY]));
+    const playerActions = env.state.registerCalls.find((entry) => entry.key === __test__.PLAYER_ACTIONS_SETTING);
+    playerActions.data.onChange();
+    await flushPromises();
+    const targets = env.state.createDirectoryCalls.map((entry) => entry.target);
+    assert.equal(targets.includes(PLAYER_FOLDER), true);
+    assert.equal(targets.includes("worlds/world-id/sephrals-image-paste-drop/clipboard-images/shared"), true);
+
+    env.state.createDirectoryCalls = [];
+    env.state.gm = false;
+    await __test__.ensurePlayerStorageDirectories();
+    assert.equal(env.state.createDirectoryCalls.length, 0);
+
+    env.state.gm = true;
+    env.state.createDirectoryErrors.set("worlds", new Error("boom"));
+    await __test__.ensurePlayerStorageDirectories();
+    assert.equal(warnings.length, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("dialog hides the folder choice for players and sharing unless the GM allows it", () => {
+  const { ACTIONS } = __test__;
+  enablePlayerTargets(ACTIONS.JOURNAL_IMAGE, ACTIONS.UPLOAD_DIRECTORY);
+  env.state.permissions.JOURNAL_CREATE = true;
+  setSetting(__test__.DEFAULT_SHARE_SETTING, true);
+  assert.equal(__test__.getDialogDefaults().shareToPlayers, false);
+
+  const dialog = createDialogForm();
+  __test__.configureDialogForm(dialog.app, __test__.UI_THEMES.SIGNATURE, null);
+  dialog.actionField.value = ACTIONS.UPLOAD_DIRECTORY;
+  dialog.actionField.fire();
+  assert.equal(dialog.uploadRow.hidden, true);
+  assert.equal(dialog.uploadField.disabled, true);
+  dialog.actionField.value = ACTIONS.JOURNAL_IMAGE;
+  dialog.actionField.fire();
+  assert.equal(dialog.shareRow.hidden, true);
+  assert.equal(dialog.shareField.disabled, true);
+
+  setSetting(__test__.PLAYER_ACTIONS_SETTING, new Set([ACTIONS.JOURNAL_IMAGE, ACTIONS.SHARE_IMAGE]));
+  assert.equal(__test__.getDialogDefaults().shareToPlayers, true);
+  const sharingDialog = createDialogForm();
+  __test__.configureDialogForm(sharingDialog.app, __test__.UI_THEMES.SIGNATURE, null);
+  sharingDialog.actionField.value = ACTIONS.JOURNAL_IMAGE;
+  sharingDialog.actionField.fire();
+  assert.equal(sharingDialog.shareRow.hidden, false);
+  assert.equal(sharingDialog.shareField.disabled, false);
+});
+
+test("handleImportedImage lets permitted players create and share journal images", async () => {
+  const { ACTIONS } = __test__;
+  enablePlayerTargets(ACTIONS.JOURNAL_IMAGE, ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE);
+  env.state.permissions.JOURNAL_CREATE = true;
+  env.state.uploadResponse = { path: `${PLAYER_FOLDER}/hash.png` };
+  env.state.dialogWaitResult = { name: "Handout", action: ACTIONS.JOURNAL_IMAGE, uploadDirectory: "elsewhere", shareToPlayers: true, activateScene: false, navigation: false };
+
+  await __test__.handleImportedImage(createImageFile("Handout.png"));
+  assert.equal(env.state.createDirectoryCalls.length, 0);
+  assert.equal(env.state.uploadCalls[0].target, PLAYER_FOLDER);
+  assert.equal(env.state.journalCreates[0].pages[0].src, `${PLAYER_FOLDER}/hash.png`);
+  assert.equal(env.state.showImageCalls.length, 1);
+
+  env.state.dialogWaitResult = { name: "Upload", action: ACTIONS.UPLOAD_DIRECTORY, uploadDirectory: "elsewhere", shareToPlayers: false, activateScene: false, navigation: false };
+  await __test__.handleImportedImage(createImageFile("Upload.png"));
+  assert.equal(env.state.uploadCalls[1].target, PLAYER_FOLDER);
+  assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.DEFAULT_UPLOAD_DIRECTORY_SETTING), false);
+});
+
+test("dragover leaves images alone for users who may not use the tool", () => {
+  env.state.gm = false;
+  const dragEvent = {
+    target: new TestHTMLElement(),
+    dataTransfer: { files: [createImageFile()], items: [], types: [], dropEffect: "" },
+    preventDefault() {
+      this.prevented = true;
+    }
+  };
+  __test__.onDragOver(dragEvent);
+  assert.equal(dragEvent.prevented, undefined);
+  assert.equal(dragEvent.dataTransfer.dropEffect, "");
 });

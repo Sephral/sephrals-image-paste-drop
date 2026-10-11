@@ -11,6 +11,7 @@ const DEFAULT_NAVIGATION_SETTING = "defaultNavigation";
 const DEFAULT_UPLOAD_DIRECTORY_SETTING = "defaultUploadDirectory";
 const UPLOAD_DIRECTORY_HISTORY_SETTING = "uploadDirectoryHistory";
 const ALLOW_PLAYER_TOOL_SETTING = "allowPlayerToolUse";
+const PLAYER_ACTIONS_SETTING = "playerAllowedActions";
 const UI_LANGUAGE_SETTING = "uiLanguage";
 const UI_THEME_SETTING = "uiTheme";
 const WINDOW_STATE_SETTING = "windowState";
@@ -37,9 +38,16 @@ const ACTIONS = {
   SHARE_IMAGE: "share-image",
   PREVIEW_ONLY: "preview-only"
 };
-const PLAYER_ALLOWED_ACTIONS = Object.freeze([
-  ACTIONS.PREVIEW_ONLY
+// Targets the GM can open up for players on top of the preview. Scene and tile targets stay GM-only,
+// because Foundry requires the Assistant role to create scenes and tiles.
+const PLAYER_SELECTABLE_ACTIONS = Object.freeze([
+  ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.UPLOAD_DIRECTORY,
+  ACTIONS.SHARE_IMAGE
 ]);
+// Players cannot create directories, so their uploads go into folders a GM client prepares.
+const PLAYER_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/players`;
+const SHARED_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/shared`;
 const MODULE_TRANSLATION_CACHE = new Map();
 let MODULE_TRANSLATION_LOAD = null;
 
@@ -59,6 +67,12 @@ function getAllActionChoices() {
 
 function getActionSettingChoices() {
   return Object.fromEntries(getAllActionChoices().map(choice => [choice.value, choice.label]));
+}
+
+function getPlayerActionSettingChoices() {
+  return Object.fromEntries(getAllActionChoices()
+    .filter(choice => PLAYER_SELECTABLE_ACTIONS.includes(choice.value))
+    .map(choice => [choice.value, choice.label]));
 }
 
 function getThemeSettingChoices() {
@@ -246,7 +260,23 @@ Hooks.once("init", () => {
     name: localize("SIPD.Settings.AllowPlayerToolUse.Label"),
     hint: localize("SIPD.Settings.AllowPlayerToolUse.Hint"),
     type: Boolean,
-    default: false
+    default: false,
+    onChange: () => {
+      void ensurePlayerStorageDirectories();
+    }
+  });
+
+  const {SetField, StringField} = foundry.data.fields;
+  game.settings.register(MODULE_ID, PLAYER_ACTIONS_SETTING, {
+    scope: "world",
+    config: true,
+    name: localize("SIPD.Settings.PlayerActions.Label"),
+    hint: localize("SIPD.Settings.PlayerActions.Hint"),
+    type: new SetField(new StringField({required: true, blank: false, choices: getPlayerActionSettingChoices()})),
+    default: [],
+    onChange: () => {
+      void ensurePlayerStorageDirectories();
+    }
   });
 
   game.settings.register(MODULE_ID, UI_THEME_SETTING, {
@@ -269,6 +299,7 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   void ensureModuleTranslationsLoaded();
+  void ensurePlayerStorageDirectories();
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
   document.addEventListener("drop", onDrop, true);
@@ -296,6 +327,7 @@ async function onPaste(event) {
 function onDragOver(event) {
   if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) ) return;
   if ( isEditableTarget(event.target) ) return;
+  if ( !canCurrentUserUseTool() ) return;
   if ( !hasTransferableImage(event.dataTransfer) ) return;
 
   event.preventDefault();
@@ -427,10 +459,40 @@ function canCurrentUserUseTool() {
   return game.user?.isGM || game.settings.get(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING);
 }
 
+function getPlayerActionWhitelist() {
+  const value = getRegisteredSettingValue(PLAYER_ACTIONS_SETTING, []);
+  const actions = value instanceof Set || Array.isArray(value) ? Array.from(value) : [];
+  return new Set(actions.filter(action => PLAYER_SELECTABLE_ACTIONS.includes(action)));
+}
+
+function canUserPerformAction(action) {
+  const user = game.user;
+  if ( !user ) return false;
+  if ( user.isGM ) return true;
+  if ( !canCurrentUserUseTool() ) return false;
+  if ( action === ACTIONS.PREVIEW_ONLY ) return true;
+  if ( !getPlayerActionWhitelist().has(action) ) return false;
+
+  // The GM opt-in above is the only gate for sharing: Foundry relays shared images without a permission check.
+  switch ( action ) {
+    case ACTIONS.UPLOAD_DIRECTORY:
+    case ACTIONS.SHARE_IMAGE:
+      return user.hasPermission("FILES_UPLOAD");
+    case ACTIONS.JOURNAL_IMAGE:
+      return user.hasPermission("FILES_UPLOAD") && user.hasPermission("JOURNAL_CREATE");
+    default:
+      return false;
+  }
+}
+
+function canUserShareImages() {
+  return canUserPerformAction(ACTIONS.SHARE_IMAGE);
+}
+
 function getPermittedActions() {
   if ( game.user?.isGM ) return Object.values(ACTIONS);
   if ( !canCurrentUserUseTool() ) return [];
-  return PLAYER_ALLOWED_ACTIONS;
+  return Object.values(ACTIONS).filter(action => canUserPerformAction(action));
 }
 
 async function handleImportedImage(file) {
@@ -453,7 +515,7 @@ async function handleImportedImage(file) {
       await game.settings.set(MODULE_ID, LAST_ACTION_SETTING, decision.action);
     }
 
-    if ( actionUsesSelectableUploadDirectory(decision.action) ) {
+    if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
       await rememberUploadDirectory(decision.uploadDirectory);
     }
 
@@ -494,8 +556,8 @@ function normalizeActionDecision(decision) {
   return {
     name: String(decision.name ?? "").trim() || defaultDocumentName(),
     action,
-    uploadDirectory: normalizeUploadDirectory(decision.uploadDirectory),
-    shareToPlayers: behavior.supportsShareToPlayers && Boolean(decision.shareToPlayers),
+    uploadDirectory: game.user?.isGM ? normalizeUploadDirectory(decision.uploadDirectory) : PLAYER_UPLOAD_DIRECTORY,
+    shareToPlayers: behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers),
     activateScene: behavior.supportsActivateScene && Boolean(decision.activateScene),
     navigation: behavior.supportsNavigation && Boolean(decision.navigation)
   };
@@ -540,7 +602,7 @@ function getReusableManagedUploadTarget(action, file) {
 
   if ( action === ACTIONS.SHARE_IMAGE ) {
     return {
-      directory: `${STORAGE_ROOT}/shared`,
+      directory: SHARED_UPLOAD_DIRECTORY,
       fileName: `shared-${game.user.id}.${extension}`
     };
   }
@@ -890,17 +952,22 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     if ( !row ) return;
     row.hidden = !visible;
   };
+  // Players upload into a fixed folder and may only share when the GM allows it.
+  const canShare = canUserShareImages();
+  const canChooseDirectory = Boolean(game.user?.isGM);
   const updateFields = () => {
     const behavior = getActionBehavior(actionField.value);
+    const showShare = behavior.supportsShareToPlayers && canShare;
+    const showUploadDirectory = behavior.supportsUploadDirectory && canChooseDirectory;
     activateSceneField.disabled = !behavior.supportsActivateScene;
     navigationField.disabled = !behavior.supportsNavigation;
-    shareToPlayersField.disabled = !behavior.supportsShareToPlayers;
-    uploadDirectoryField.disabled = !behavior.supportsUploadDirectory;
+    shareToPlayersField.disabled = !showShare;
+    uploadDirectoryField.disabled = !showUploadDirectory;
 
-    setRowVisible(optionRows.shareToPlayers, behavior.supportsShareToPlayers);
+    setRowVisible(optionRows.shareToPlayers, showShare);
     setRowVisible(optionRows.activateScene, behavior.supportsActivateScene);
     setRowVisible(optionRows.navigation, behavior.supportsNavigation);
-    setRowVisible(optionRows.uploadDirectory, behavior.supportsUploadDirectory);
+    setRowVisible(optionRows.uploadDirectory, showUploadDirectory);
   };
 
   actionField.addEventListener("change", updateFields);
@@ -920,7 +987,7 @@ function getDialogDefaults() {
 
   return {
     action: resolvedAction,
-    shareToPlayers: game.settings.get(MODULE_ID, DEFAULT_SHARE_SETTING),
+    shareToPlayers: canUserShareImages() && game.settings.get(MODULE_ID, DEFAULT_SHARE_SETTING),
     activateScene: game.settings.get(MODULE_ID, DEFAULT_ACTIVATE_SCENE_SETTING),
     navigation: game.settings.get(MODULE_ID, DEFAULT_NAVIGATION_SETTING),
     uploadDirectory: normalizeUploadDirectory(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
@@ -1072,8 +1139,10 @@ async function uploadClipboardFile(file, {directory=null, targetPath=null}={}) {
     throw new Error(localize("SIPD.Error.UploadPermission"));
   }
 
+  const isGM = Boolean(game.user.isGM);
   const reusableTarget = targetPath?.fileName ? targetPath : null;
-  const path = reusableTarget ? reusableTarget.directory : normalizeUploadDirectory(directory);
+  const fallbackDirectory = isGM ? normalizeUploadDirectory(directory) : PLAYER_UPLOAD_DIRECTORY;
+  const path = reusableTarget ? reusableTarget.directory : fallbackDirectory;
   const uploadFileName = reusableTarget?.fileName || await buildContentAddressedUploadFileName(file);
   const uploadFile = uploadFileName !== file.name
     ? new File([file], uploadFileName, {
@@ -1081,26 +1150,51 @@ async function uploadClipboardFile(file, {directory=null, targetPath=null}={}) {
       lastModified: Date.now()
     })
     : file;
-  const filePicker = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+  const filePicker = getFilePickerClass();
   const target = getRootedStoragePath(path);
-  await ensureDirectoryExists(filePicker, target);
 
-  if ( !reusableTarget ) {
+  // Foundry only lets Assistant GMs and above create directories; players upload into prepared folders.
+  if ( isGM ) await ensureDirectoryExists(filePicker, target);
+
+  if ( !reusableTarget && (isGM || game.user.hasPermission("FILES_BROWSE")) ) {
     const existingPath = await findExistingFilePath(filePicker, target, uploadFileName);
     if ( existingPath ) return existingPath;
   }
 
   const response = await filePicker.upload("data", target, uploadFile, {}, {notify: false});
   if ( !response?.path ) {
-    throw new Error(localize("SIPD.Error.UploadFailed"));
+    throw new Error(localize(isGM ? "SIPD.Error.UploadFailed" : "SIPD.Error.PlayerUploadFailed"));
   }
   return response.path;
 }
 
+function getFilePickerClass() {
+  return foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+}
+
 async function findExistingFilePath(filePicker, target, fileName) {
-  const response = await filePicker.browse("data", target, {wildcard: false});
+  let response;
+  try {
+    response = await filePicker.browse("data", target, {wildcard: false});
+  } catch (_error) {
+    return null;
+  }
   const expectedPath = `${target}/${fileName}`.replace(/\\/g, "/");
   return response?.files?.find(path => String(path).replace(/\\/g, "/") === expectedPath) ?? null;
+}
+
+async function ensurePlayerStorageDirectories() {
+  if ( !game.user?.isGM || !game.settings.get(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING) ) return;
+  if ( !getPlayerActionWhitelist().size ) return;
+
+  const filePicker = getFilePickerClass();
+  try {
+    for ( const directory of [PLAYER_UPLOAD_DIRECTORY, SHARED_UPLOAD_DIRECTORY] ) {
+      await ensureDirectoryExists(filePicker, getRootedStoragePath(directory));
+    }
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not prepare the player upload folders`, error);
+  }
 }
 
 async function ensureDirectoryExists(filePicker, target) {
@@ -1387,6 +1481,7 @@ export const __test__ = {
   DEFAULT_UPLOAD_DIRECTORY_SETTING,
   UPLOAD_DIRECTORY_HISTORY_SETTING,
   ALLOW_PLAYER_TOOL_SETTING,
+  PLAYER_ACTIONS_SETTING,
   UI_LANGUAGE_SETTING,
   UI_THEME_SETTING,
   WINDOW_STATE_SETTING,
@@ -1395,9 +1490,12 @@ export const __test__ = {
   UI_THEMES,
   WINDOW_KEYS,
   ACTIONS,
-  PLAYER_ALLOWED_ACTIONS,
+  PLAYER_SELECTABLE_ACTIONS,
+  PLAYER_UPLOAD_DIRECTORY,
+  SHARED_UPLOAD_DIRECTORY,
   getAllActionChoices,
   getActionSettingChoices,
+  getPlayerActionSettingChoices,
   getThemeSettingChoices,
   normalizeUiLanguage,
   getPreferredLanguage,
@@ -1416,6 +1514,9 @@ export const __test__ = {
   guessMimeTypeFromUri,
   fileNameFromUri,
   canCurrentUserUseTool,
+  getPlayerActionWhitelist,
+  canUserPerformAction,
+  canUserShareImages,
   getPermittedActions,
   handleImportedImage,
   requiresPersistentPath,
@@ -1458,7 +1559,9 @@ export const __test__ = {
   applyDialogTheme,
   styleActionButtons,
   uploadClipboardFile,
+  getFilePickerClass,
   findExistingFilePath,
+  ensurePlayerStorageDirectories,
   ensureDirectoryExists,
   executeAction,
   hasCanvasScene,

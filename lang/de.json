@@ -1,6 +1,8 @@
 {
-  "SIPD.Settings.AllowPlayerToolUse.Label": "Spielern die eingeschränkte Nutzung von SIPD erlauben",
-  "SIPD.Settings.AllowPlayerToolUse.Hint": "Wenn aktiv, können Nicht-GMs den Import-Dialog öffnen, sind aber auf die reine Vorschau beschränkt. Standardmäßig kann nur der GM das Tool verwenden.",
+  "SIPD.Settings.AllowPlayerToolUse.Label": "Spielern die Nutzung von SIPD erlauben",
+  "SIPD.Settings.AllowPlayerToolUse.Hint": "Wenn aktiv, können Nicht-GMs den Import-Dialog öffnen und immer die Vorschau nutzen. Weitere Ziele werden unter „Zusätzliche Ziele für Spieler“ festgelegt. Standardmäßig kann nur der GM das Tool verwenden.",
+  "SIPD.Settings.PlayerActions.Label": "Zusätzliche Ziele für Spieler",
+  "SIPD.Settings.PlayerActions.Hint": "Ziele, die Spieler zusätzlich zur Vorschau nutzen dürfen. Spieler brauchen außerdem die Foundry-Berechtigung „Dateien hochladen“ und für Journal-Bilder „Journaleinträge erstellen“. Ihre Dateien landen in clipboard-images/players und clipboard-images/shared; diese Ordner legt ein GM-Client an. Szenen- und Tile-Ziele erfordern immer einen GM.",
   "SIPD.Settings.Language.Label": "Sprache",
   "SIPD.Settings.Language.Hint": "Festlegen, ob Image Paste & Drop Foundry folgt oder eine feste Modulsprache verwendet.",
   "SIPD.Language.Default": "Foundry folgen",
@@ -67,6 +69,7 @@
   "SIPD.Error.DropFetchFailed": "Das abgelegte Bild konnte nicht geladen werden.",
   "SIPD.Error.UploadPermission": "Du hast keine Berechtigung zum Hochladen von Dateien.",
   "SIPD.Error.UploadFailed": "Das Hochladen des Zwischenablage-Bildes ist fehlgeschlagen.",
+  "SIPD.Error.PlayerUploadFailed": "Das Hochladen ist fehlgeschlagen. Nach dem Freigeben der Spieler-Ziele muss sich einmal ein GM einloggen, damit die Upload-Ordner existieren.",
   "SIPD.Error.NoScene": "Es ist keine aktive Szene für die Tile-Platzierung verfügbar.",
   "SIPD.Error.UnsupportedAction": "Diese Zwischenablage-Aktion wird nicht unterstützt."
 }

@@ -1,6 +1,8 @@
 {
-  "SIPD.Settings.AllowPlayerToolUse.Label": "Allow players to use SIPD in restricted mode",
-  "SIPD.Settings.AllowPlayerToolUse.Hint": "When enabled, non-GM users can open the import dialog but are limited to preview-only actions. By default only the GM can use the tool.",
+  "SIPD.Settings.AllowPlayerToolUse.Label": "Allow players to use SIPD",
+  "SIPD.Settings.AllowPlayerToolUse.Hint": "When enabled, non-GM users can open the import dialog and always use the preview. Further targets are set under \"Additional player targets\". By default only the GM can use the tool.",
+  "SIPD.Settings.PlayerActions.Label": "Additional player targets",
+  "SIPD.Settings.PlayerActions.Hint": "Targets players may use besides the preview. Players also need the Foundry permission \"Upload Files\", and \"Create Journal Entries\" for journal images. Their files go to clipboard-images/players and clipboard-images/shared; a GM client creates these folders. Scene and tile targets always require a GM.",
   "SIPD.Settings.Language.Label": "Language",
   "SIPD.Settings.Language.Hint": "Choose whether Image Paste & Drop follows Foundry or uses a fixed module language.",
   "SIPD.Language.Default": "Follow Foundry",
@@ -67,6 +69,7 @@
   "SIPD.Error.DropFetchFailed": "The dropped image could not be loaded.",
   "SIPD.Error.UploadPermission": "You do not have permission to upload files.",
   "SIPD.Error.UploadFailed": "The clipboard image upload failed.",
+  "SIPD.Error.PlayerUploadFailed": "The upload failed. A GM has to log in once after player targets were enabled so the upload folders exist.",
   "SIPD.Error.NoScene": "No active scene is available for tile placement.",
   "SIPD.Error.UnsupportedAction": "This clipboard action is not supported."
 }

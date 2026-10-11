@@ -156,6 +156,7 @@ export function createTestEnvironment() {
     gm: true,
     allowPlayerToolUse: false,
     filesUploadPermission: true,
+    permissions: {},
     ready: true,
     world: { id: "world-id", title: "World Title" },
     userId: "gm-user"
@@ -222,7 +223,26 @@ export function createTestEnvironment() {
     }
   }
 
+  class TestStringField {
+    constructor(options = {}) {
+      this.options = options;
+    }
+  }
+
+  class TestSetField {
+    constructor(element, options = {}) {
+      this.element = element;
+      this.options = options;
+    }
+  }
+
   const foundry = {
+    data: {
+      fields: {
+        SetField: TestSetField,
+        StringField: TestStringField
+      }
+    },
     utils: {
       deepClone(value) {
         return structuredClone(value);
@@ -314,7 +334,7 @@ export function createTestEnvironment() {
         return state.userId;
       },
       hasPermission(permission) {
-        return permission === "FILES_UPLOAD" ? state.filesUploadPermission : false;
+        return permission === "FILES_UPLOAD" ? state.filesUploadPermission : Boolean(state.permissions[permission]);
       }
     }
   };
@@ -420,6 +440,7 @@ export function createTestEnvironment() {
     ["SIPD.Error.DimensionRead", "dimension read failed"],
     ["SIPD.Error.UploadPermission", "upload permission"],
     ["SIPD.Error.UploadFailed", "upload failed"],
+    ["SIPD.Error.PlayerUploadFailed", "player upload failed"],
     ["SIPD.Error.UnsupportedAction", "unsupported action"],
     ["SIPD.Error.NoScene", "no scene"],
     ["SIPD.Notification.Error", "error {message}"],
@@ -488,6 +509,7 @@ export function createTestEnvironment() {
     state.gm = true;
     state.allowPlayerToolUse = false;
     state.filesUploadPermission = true;
+    state.permissions = {};
     state.ready = true;
     state.world = { id: "world-id", title: "World Title" };
     state.userId = "gm-user";
@@ -508,6 +530,7 @@ export function createTestEnvironment() {
     state.settingsValues.set("sephrals-image-paste-drop.defaultUploadDirectory", "clipboard-images/2024/03");
     state.settingsValues.set("sephrals-image-paste-drop.uploadDirectoryHistory", []);
     state.settingsValues.set("sephrals-image-paste-drop.allowPlayerToolUse", false);
+    state.settingsValues.set("sephrals-image-paste-drop.playerAllowedActions", new Set());
     state.settingsValues.set("sephrals-image-paste-drop.uiTheme", "signature");
     state.settingsValues.set("sephrals-image-paste-drop.windowState", {});
     game.i18n.lang = "en";
