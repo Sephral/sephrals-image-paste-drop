@@ -14,6 +14,12 @@ Install the module from the package browser in Foundry VTT or open its [package 
 
 Questions, feedback, and module support are welcome on [Discord](https://discord.gg/7BjCgDYaBP).
 
+## More modules
+
+[![More modules by Sephral](https://img.shields.io/badge/GitHub-More%20modules%20by%20Sephral-181717?logo=github&logoColor=white)](https://github.com/Sephral)
+
+More modules by Sephral for Foundry VTT are listed on [github.com/Sephral](https://github.com/Sephral).
+
 ## Demo
 
 ![SCBR demo](media/demo.gif)
