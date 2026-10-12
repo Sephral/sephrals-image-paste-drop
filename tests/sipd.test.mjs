@@ -67,6 +67,20 @@ function createDialogForm() {
   return { app, form, preview, shareRow, activateRow, navigationRow, uploadRow, windowContent, actionField, shareField, activateField, navigationField, uploadField };
 }
 
+function createPasteEvent(text, { target = new TestHTMLElement(), file = null } = {}) {
+  return {
+    target,
+    clipboardData: {
+      items: file ? [{ kind: "file", type: file.type, getAsFile: () => file }] : [{ kind: "string", type: "text/plain", getAsFile: () => null }],
+      getData: (type) => type === "text/plain" ? text : ""
+    },
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {}
+  };
+}
+
 test.beforeEach(() => {
   env.reset();
   __test__.resetModuleTranslations();
@@ -256,8 +270,10 @@ test("paste, dragover, and drop handlers cover gatekeeping, success, and error p
     preventDefault() {},
     stopPropagation() {}
   };
+  // The image stub still fails to load, so the link cannot be shown either: an error and no link offer
   await __test__.onDrop(uriDrop);
   assert.equal(env.state.notifications.error.at(-1), "error drop fetch failed");
+  assert.equal(env.state.lastDialogOptions, null);
 });
 
 test("editable target, clipboard extraction, transfer detection, and dropped-image fetching handle variants", async () => {
@@ -928,4 +944,199 @@ test("a configured storage folder replaces the default root everywhere", async (
   assert.equal(env.state.uploadCalls[0].source, "data");
   assert.equal(env.state.uploadCalls[0].target, "assets/handouts/maps");
   assert.deepEqual(env.state.createDirectoryCalls.map((entry) => entry.target), ["assets", "assets/handouts", "assets/handouts/maps"]);
+});
+
+test("pasted image links run the URL import and other text keeps its normal paste", async () => {
+  assert.equal(__test__.parseImageUrl(" https://example.com/maps/Cave.PNG?width=200 "), "https://example.com/maps/Cave.PNG?width=200");
+  assert.equal(__test__.parseImageUrl("data:image/png;base64,iVBORw0KGgo="), "data:image/png;base64,iVBORw0KGgo=");
+  assert.equal(__test__.parseImageUrl("https://example.com/gallery.html"), null);
+  assert.equal(__test__.parseImageUrl("https://example.com/a.png\nhttps://example.com/b.png"), null);
+  assert.equal(__test__.parseImageUrl("look at https://example.com/a.png"), null);
+  assert.equal(__test__.parseImageUrl("ftp://example.com/a.png"), null);
+  assert.equal(__test__.parseImageUrl("javascript:alert(1)//.png"), null);
+  assert.equal(__test__.parseImageUrl("data:text/html,x.png"), null);
+  assert.equal(__test__.parseImageUrl(null), null);
+  assert.equal(__test__.extractClipboardImageUrl({ clipboardData: { items: [] } }), null);
+  assert.doesNotMatch(__test__.fileNameFromUri("data:image/png;base64,iVBORw0KGgo=", "png"), /base64/);
+
+  const fetched = [];
+  env.state.fetchImpl = async (url) => {
+    fetched.push(url);
+    return { ok: true, blob: async () => new Blob(["img"], { type: "image/webp" }) };
+  };
+  env.state.dialogWaitResult = { name: "Linked", action: __test__.ACTIONS.PREVIEW_ONLY, shareToPlayers: false, activateScene: false, navigation: false };
+
+  const linkPaste = createPasteEvent("https://example.com/maps/cave.webp");
+  await __test__.onPaste(linkPaste);
+  assert.equal(linkPaste.prevented, true);
+  assert.deepEqual(fetched, ["https://example.com/maps/cave.webp"]);
+  assert.equal(env.state.imagePopouts.length, 1);
+  assert.equal(env.state.uploadCalls.length, 0);
+
+  const textPaste = createPasteEvent("just some notes");
+  await __test__.onPaste(textPaste);
+  assert.equal(textPaste.prevented, undefined);
+
+  const input = new TestHTMLElement();
+  input.setClosest(() => input);
+  const inputPaste = createPasteEvent("https://example.com/maps/cave.webp", { target: input });
+  await __test__.onPaste(inputPaste);
+  assert.equal(inputPaste.prevented, undefined);
+
+  // Image data in the clipboard wins over a copied link
+  await __test__.onPaste(createPasteEvent("https://example.com/other.png", { file: createImageFile() }));
+  assert.equal(fetched.length, 1);
+  assert.equal(env.state.imagePopouts.length, 2);
+
+  setSetting(__test__.ENABLE_PASTE_SETTING, false);
+  const disabledPaste = createPasteEvent("https://example.com/maps/cave.webp");
+  await __test__.onPaste(disabledPaste);
+  assert.equal(disabledPaste.prevented, undefined);
+});
+
+test("an image URL that cannot be downloaded can be linked for journal pages, sharing, and the preview", async () => {
+  const { ACTIONS } = __test__;
+  env.canvas.ready = true;
+  env.canvas.scene = { id: "scene-1", name: "Scene One", constructor: { metadata: {} } };
+
+  const remoteChoices = __test__.getActionChoices({ remoteUrl: true });
+  assert.deepEqual(remoteChoices.filter((choice) => !choice.disabled).map((choice) => choice.value), [...__test__.REMOTE_URL_ACTIONS]);
+  assert.equal(__test__.getActionChoices().find((choice) => choice.value === ACTIONS.TILE_CENTERED).disabled, false);
+  assert.equal(__test__.getDialogDefaults({ remoteUrl: true }).action, ACTIONS.JOURNAL_IMAGE);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TILE_CENTERED }, { remoteUrl: true }).action, ACTIONS.PREVIEW_ONLY);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.UPLOAD_DIRECTORY }, { remoteUrl: true }).action, ACTIONS.PREVIEW_ONLY);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE }, { remoteUrl: true }).action, ACTIONS.JOURNAL_IMAGE);
+  assert.equal(__test__.getUrlHostLabel("https://images.example.com/a.png"), "images.example.com");
+  assert.equal(__test__.getUrlHostLabel("not a url"), "not a url");
+  assert.equal(__test__.createFetchFailedError("https://x.test/a.png").remoteUrl, "https://x.test/a.png");
+
+  const url = "https://images.example.com/maps/cave.png";
+  const dialogs = [];
+  env.state.fetchImpl = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  env.state.dialogWaitResult = (options) => {
+    dialogs.push(options);
+    if ( options.buttons[0].action === "useUrl" ) return options.buttons[0].callback();
+    return { name: "Linked Map", action: ACTIONS.JOURNAL_IMAGE, shareToPlayers: true, activateScene: false, navigation: false };
+  };
+
+  const linkPaste = createPasteEvent(url);
+  await __test__.onPaste(linkPaste);
+  assert.equal(linkPaste.prevented, true);
+  assert.equal(dialogs.length, 2);
+  assert.match(dialogs[0].content, /images\.example\.com/);
+  assert.match(dialogs[1].content, /SIPD\.Dialog\.PreviewBadgeLinked/);
+  assert.match(dialogs[1].content, /value="tile-centered" disabled/);
+  assert.match(dialogs[1].content, /value="journal-image" selected/);
+  assert.equal(env.state.uploadCalls.length, 0);
+  assert.equal(env.state.objectUrls.length, 0);
+  assert.equal(env.state.journalCreates[0].pages[0].src, url);
+  assert.deepEqual(env.state.showImageCalls.map((call) => call.path), [url]);
+  assert.equal(env.state.notifications.error.length, 0);
+
+  // A failing HTTP response offers the link too, and declining it ends quietly
+  env.reset();
+  dialogs.length = 0;
+  env.state.fetchImpl = async () => ({ ok: false });
+  env.state.dialogWaitResult = (options) => {
+    dialogs.push(options);
+    return null;
+  };
+  const uriDrop = {
+    target: new TestHTMLElement(),
+    dataTransfer: { files: [], items: [], types: ["text/uri-list"], getData: (type) => type === "text/uri-list" ? url : "" },
+    preventDefault() {},
+    stopPropagation() {}
+  };
+  await __test__.onDrop(uriDrop);
+  assert.equal(dialogs.length, 1);
+  assert.equal(env.state.journalCreates.length, 0);
+  assert.equal(env.state.notifications.error.length, 0);
+
+  // A link the browser cannot show either ends with an error and no offer
+  dialogs.length = 0;
+  env.state.imageBehavior.error = true;
+  await __test__.onDrop(uriDrop);
+  assert.equal(dialogs.length, 0);
+  assert.equal(env.state.notifications.error.at(-1), "error drop fetch failed");
+});
+
+test("tiles dropped on the canvas are centered on the drop point inside the scene", async () => {
+  const { ACTIONS } = __test__;
+  const board = new TestHTMLElement();
+  const scene = {
+    id: "scene-1",
+    name: "Scene One",
+    constructor: { metadata: {} },
+    tileDocs: [],
+    async createEmbeddedDocuments(_type, docs) {
+      this.tileDocs.push(...docs);
+      return [{ name: docs[0].name }];
+    }
+  };
+  env.canvas.ready = true;
+  env.canvas.scene = scene;
+  env.canvas.app = { view: board };
+  env.canvas.canvasCoordinatesFromClient = ({ x, y }) => ({ x: x * 2, y: y * 2 });
+
+  try {
+    assert.deepEqual(__test__.getCanvasDropPoint({ target: board, clientX: 150, clientY: 100, shiftKey: false }), { x: 300, y: 200, sceneId: "scene-1", snap: true });
+    assert.equal(__test__.getCanvasDropPoint({ target: board, clientX: 1, clientY: 1, shiftKey: true }).snap, false);
+    assert.equal(__test__.getCanvasDropPoint({ target: new TestHTMLElement(), clientX: 1, clientY: 1 }), null);
+
+    // v13: x/y is the top-left corner
+    const rect = { x: 100, y: 100, width: 1000, height: 800 };
+    const size = { width: 200, height: 100 };
+    assert.equal(__test__.tilesUseAnchorPosition(), false);
+    assert.deepEqual(__test__.getTilePosition(size, rect), { x: 500, y: 450 });
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 400, y: 300 }), { x: 300, y: 250 });
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 120, y: 880 }), { x: 100, y: 800 });
+    assert.deepEqual(__test__.getTilePosition({ width: 1200, height: 100 }, rect, { x: 400, y: 300 }), { x: 0, y: 250 });
+    env.canvas.tiles = { getSnappedPoint: ({ x, y }) => ({ x: Math.round(x / 50) * 50, y: Math.round(y / 50) * 50 }) };
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 433, y: 318, snap: true }), { x: 350, y: 250 });
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 433, y: 318, snap: false }), { x: 333, y: 268 });
+    assert.equal(__test__.clampSpan(-50, 100, 0, 1000), 0);
+    assert.equal(__test__.clampSpan(950, 100, 0, 1000), 900);
+
+    // v14: x/y is the texture anchor, the tile center by default, and Foundry snaps that point
+    env.game.release = { generation: 14 };
+    assert.equal(__test__.tilesUseAnchorPosition(), true);
+    assert.deepEqual(__test__.getTilePosition(size, rect), { x: 600, y: 500 });
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 433, y: 318, snap: true }), { x: 450, y: 300 });
+    assert.deepEqual(__test__.getTilePosition(size, rect, { x: 120, y: 880 }), { x: 200, y: 850 });
+    delete env.game.release;
+    delete env.canvas.tiles;
+
+    // The sceneRect of the stub canvas is 1000 x 800 at 0,0
+    const dropPoint = { x: 400, y: 300, sceneId: "scene-1", snap: false };
+    await __test__.createTileFromImage({ name: "Dropped", path: "a.png", width: 200, height: 100, dropPoint }, { fitToScene: false });
+    await __test__.createTileFromImage({ name: "Fitted", path: "a.png", width: 200, height: 100, dropPoint }, { fitToScene: true });
+    await __test__.createTileFromImage({ name: "Elsewhere", path: "a.png", width: 200, height: 100, dropPoint: { ...dropPoint, sceneId: "scene-2" } }, { fitToScene: false });
+    assert.deepEqual(scene.tileDocs.map((doc) => [doc.x, doc.y]), [[300, 250], [400, 350], [400, 350]]);
+
+    // Full drop on the board: Shift skips snapping, a paste keeps the scene center
+    scene.tileDocs = [];
+    env.canvas.tiles = { getSnappedPoint: () => ({ x: 0, y: 0 }) };
+    env.state.imageBehavior = { width: 200, height: 100, error: false };
+    env.state.uploadResponse = { path: "worlds/world-id/sephrals-image-paste-drop/clipboard-images/tile.png" };
+    env.state.dialogWaitResult = { name: "Dropped", action: ACTIONS.TILE_CENTERED, uploadDirectory: "custom", shareToPlayers: false, activateScene: false, navigation: false };
+    await __test__.onDrop({
+      target: board,
+      clientX: 200,
+      clientY: 150,
+      shiftKey: true,
+      dataTransfer: { files: [createImageFile()], items: [], types: [], getData: () => "" },
+      preventDefault() {},
+      stopPropagation() {}
+    });
+    await __test__.onPaste(createPasteEvent("", { file: createImageFile() }));
+    assert.deepEqual(scene.tileDocs.map((doc) => [doc.x, doc.y]), [[300, 250], [400, 350]]);
+    assert.equal(scene.tileDocs[0].texture.src, env.state.uploadResponse.path);
+  } finally {
+    delete env.canvas.app;
+    delete env.canvas.canvasCoordinatesFromClient;
+    delete env.canvas.tiles;
+    delete env.game.release;
+  }
 });

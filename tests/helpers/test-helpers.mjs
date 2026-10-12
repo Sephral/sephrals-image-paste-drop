@@ -472,6 +472,8 @@ export function createTestEnvironment() {
     ["SIPD.Dialog.ActivateHint", "Activate Hint"],
     ["SIPD.Dialog.Navigation", "Navigation"],
     ["SIPD.Dialog.NavigationHint", "Navigation Hint"],
+    ["SIPD.UrlFallback.Intro", "The server {host} blocks the download"],
+    ["SIPD.UrlFallback.UseUrl", "Use the URL directly"],
     ["SIPD.Settings.Language.Label", "Language"],
     ["SIPD.Settings.Language.Hint", "Language hint"],
     ["SIPD.Language.Default", "Follow Foundry"],

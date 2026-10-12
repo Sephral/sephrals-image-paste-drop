@@ -46,6 +46,14 @@ const PLAYER_SELECTABLE_ACTIONS = Object.freeze([
   ACTIONS.UPLOAD_DIRECTORY,
   ACTIONS.SHARE_IMAGE
 ]);
+// Targets that can show a linked image the browser could not download. Foundry draws scene backgrounds and
+// tiles with WebGL, which needs the same cross-origin access the download lacked, and uploads need a copy.
+const REMOTE_URL_ACTIONS = Object.freeze([
+  ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.SHARE_IMAGE,
+  ACTIONS.PREVIEW_ONLY
+]);
+const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
 // Players cannot create directories, so their uploads go into folders a GM client prepares.
 const PLAYER_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/players`;
 const SHARED_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/shared`;
@@ -330,13 +338,14 @@ async function onPaste(event) {
   if ( !canCurrentUserUseTool() ) return;
 
   const clipboardImage = extractClipboardImage(event);
-  if ( !clipboardImage ) return;
+  const imageUrl = clipboardImage ? null : extractClipboardImageUrl(event);
+  if ( !clipboardImage && !imageUrl ) return;
 
   event.preventDefault();
   event.stopPropagation();
 
   try {
-    await handleImportedImage(clipboardImage);
+    await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl));
   } catch (error) {
     console.error(`${MODULE_ID} | Paste handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -362,10 +371,10 @@ async function onDrop(event) {
   event.preventDefault();
   event.stopPropagation();
 
+  // Tiles from a drop onto the canvas go where the image was dropped
+  const dropPoint = getCanvasDropPoint(event);
   try {
-    const droppedImage = await extractDroppedImage(event.dataTransfer);
-    if ( !droppedImage ) return;
-    await handleImportedImage(droppedImage);
+    await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint});
   } catch (error) {
     console.error(`${MODULE_ID} | Drop handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -395,6 +404,26 @@ function extractClipboardImage(event) {
     if ( file ) return file;
   }
   return null;
+}
+
+// Copied image links arrive as plain text. Only a single image URL counts, any other text is left alone.
+function extractClipboardImageUrl(event) {
+  return parseImageUrl(event.clipboardData?.getData?.("text/plain"));
+}
+
+function parseImageUrl(text) {
+  const value = String(text ?? "").trim();
+  if ( !value || /\s/.test(value) ) return null;
+  if ( /^data:image\/[a-z0-9.+-]+[;,]/i.test(value) ) return value;
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_error) {
+    return null;
+  }
+  if ( !["http:", "https:"].includes(url.protocol) ) return null;
+  return IMAGE_URL_EXTENSIONS.includes(getFileExtension(url.pathname)) ? url.href : null;
 }
 
 function hasTransferableImage(dataTransfer) {
@@ -437,11 +466,11 @@ async function fetchDroppedImage(rawUri) {
   try {
     response = await fetch(uri);
   } catch (error) {
-    throw new Error(localize("SIPD.Error.DropFetchFailed"));
+    throw createFetchFailedError(uri);
   }
 
   if ( !response.ok ) {
-    throw new Error(localize("SIPD.Error.DropFetchFailed"));
+    throw createFetchFailedError(uri);
   }
 
   const blob = await response.blob();
@@ -451,6 +480,13 @@ async function fetchDroppedImage(rawUri) {
   const extension = extensionForMimeType(mimeType);
   const fileName = fileNameFromUri(uri, extension);
   return new File([blob], fileName, {type: mimeType, lastModified: Date.now()});
+}
+
+// Carries the URL along, so the caller can offer to use it directly (CORS blocks or network errors).
+function createFetchFailedError(uri) {
+  const error = new Error(localize("SIPD.Error.DropFetchFailed"));
+  error.remoteUrl = uri;
+  return error;
 }
 
 function guessMimeTypeFromUri(uri) {
@@ -467,7 +503,8 @@ function guessMimeTypeFromUri(uri) {
 function fileNameFromUri(uri, fallbackExtension) {
   try {
     const url = new URL(uri);
-    const candidate = url.pathname.split("/").at(-1)?.trim();
+    // A data: URL holds the image itself, its "path" is no file name
+    const candidate = url.protocol === "data:" ? "" : url.pathname.split("/").at(-1)?.trim();
     if ( candidate ) return candidate;
   } catch (error) {}
 
@@ -514,25 +551,27 @@ function getPermittedActions() {
   return Object.values(ACTIONS).filter(action => canUserPerformAction(action));
 }
 
-async function handleImportedImage(file) {
+// Loads the image and runs the import. An image URL that cannot be downloaded may be used directly instead.
+async function importImage(loadImage, options={}) {
+  let file;
+  try {
+    file = await loadImage();
+  } catch (error) {
+    if ( !error?.remoteUrl ) throw error;
+    return handleRemoteImageUrl(error.remoteUrl);
+  }
+  if ( file ) await handleImportedImage(file, options);
+}
+
+async function handleImportedImage(file, {dropPoint=null}={}) {
   const preparedFile = prepareClipboardFile(file);
   const objectUrl = URL.createObjectURL(preparedFile);
   let releaseObjectUrl = true;
 
   try {
     const dimensions = await readImageDimensions(objectUrl);
-    const decision = normalizeActionDecision(await promptForAction({
-      previewUrl: objectUrl,
-      defaultName: defaultDocumentName(),
-      width: dimensions.width,
-      height: dimensions.height
-    }));
-
+    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions});
     if ( !decision ) return;
-
-    if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) ) {
-      await game.settings.set(MODULE_ID, LAST_ACTION_SETTING, decision.action);
-    }
 
     if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
       await rememberUploadDirectory(decision.uploadDirectory);
@@ -554,21 +593,113 @@ async function handleImportedImage(file) {
       path,
       width: dimensions.width,
       height: dimensions.height,
-      temporaryObjectUrl: path === objectUrl ? objectUrl : null
+      temporaryObjectUrl: path === objectUrl ? objectUrl : null,
+      dropPoint
     });
   } finally {
     if ( releaseObjectUrl ) URL.revokeObjectURL(objectUrl);
   }
 }
 
+// Uses an image URL the browser could not download as it is, without uploading a copy.
+async function handleRemoteImageUrl(url) {
+  let dimensions;
+  try {
+    dimensions = await readImageDimensions(url);
+  } catch (_error) {
+    throw new Error(localize("SIPD.Error.DropFetchFailed"));
+  }
+  if ( !(await confirmRemoteImageUrl(url)) ) return;
+
+  const decision = await promptForImportDecision({previewUrl: url, ...dimensions, remoteUrl: true});
+  if ( !decision ) return;
+
+  await executeAction({
+    action: decision.action,
+    name: decision.name,
+    shareToPlayers: decision.shareToPlayers,
+    activateScene: decision.activateScene,
+    navigation: decision.navigation,
+    path: url,
+    width: dimensions.width,
+    height: dimensions.height,
+    temporaryObjectUrl: null
+  });
+}
+
+async function confirmRemoteImageUrl(url) {
+  const theme = getUITheme();
+  const useUrlLabel = localize("SIPD.UrlFallback.UseUrl");
+  const content = `
+    <div class="sipd-shell" data-ui-theme="${escapeHtml(theme)}">
+      <section class="sipd-hero">
+        <div class="sipd-eyebrow">${localize("SIPD.Dialog.Eyebrow")}</div>
+        <h2 class="sipd-heading">${localize("SIPD.UrlFallback.Heading")}</h2>
+        <p class="sipd-summary">${localize("SIPD.UrlFallback.Intro", {host: escapeHtml(getUrlHostLabel(url))})}</p>
+        <p class="sipd-summary">${localize("SIPD.UrlFallback.Hint")}</p>
+        <p class="sipd-summary">${localize("SIPD.UrlFallback.Targets")}</p>
+      </section>
+    </div>
+  `;
+
+  const result = await foundry.applications.api.DialogV2.wait({
+    rejectClose: false,
+    window: {title: localize("SIPD.UrlFallback.Title")},
+    content,
+    modal: true,
+    render: (_event, dialog) => {
+      dialog.element.classList.add("sipd-app");
+      applyDialogTheme(dialog.element, theme);
+      styleActionButtons(dialog.element, {primaryLabel: useUrlLabel, secondaryLabel: localize("SIPD.Dialog.Cancel")});
+    },
+    buttons: [
+      {
+        action: "useUrl",
+        label: useUrlLabel,
+        default: true,
+        callback: () => true
+      },
+      {
+        action: "cancel",
+        label: localize("SIPD.Dialog.Cancel")
+      }
+    ]
+  });
+  return result === true;
+}
+
+function getUrlHostLabel(url) {
+  try {
+    const host = new URL(url).host;
+    if ( host ) return host;
+  } catch (_error) {}
+  return String(url ?? "").slice(0, 60);
+}
+
+async function promptForImportDecision({previewUrl, width, height, remoteUrl=false}) {
+  const decision = normalizeActionDecision(await promptForAction({
+    previewUrl,
+    defaultName: defaultDocumentName(),
+    width,
+    height,
+    remoteUrl
+  }), {remoteUrl});
+  if ( !decision ) return null;
+
+  if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) ) {
+    await game.settings.set(MODULE_ID, LAST_ACTION_SETTING, decision.action);
+  }
+  return decision;
+}
+
 function requiresPersistentPath(action, shareToPlayers) {
   return shareToPlayers || (action !== ACTIONS.PREVIEW_ONLY);
 }
 
-function normalizeActionDecision(decision) {
+function normalizeActionDecision(decision, {remoteUrl=false}={}) {
   if ( !decision ) return null;
 
-  const allowedActions = new Set(getPermittedActions());
+  const allowedActions = new Set(getPermittedActions().filter(action => !remoteUrl || REMOTE_URL_ACTIONS.includes(action)));
   const action = allowedActions.has(decision.action) ? decision.action : ACTIONS.PREVIEW_ONLY;
   const behavior = getActionBehavior(action);
 
@@ -755,8 +886,8 @@ async function readImageDimensions(src) {
   });
 }
 
-async function promptForAction({previewUrl, defaultName, width, height}) {
-  const defaults = getDialogDefaults();
+async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false}) {
+  const defaults = getDialogDefaults({remoteUrl});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: 860, height: 720});
   const content = `
     <div class="sipd-shell sipd-shell--import" data-ui-theme="${escapeHtml(defaults.uiTheme)}">
@@ -781,7 +912,7 @@ async function promptForAction({previewUrl, defaultName, width, height}) {
               <span class="sipd-panel-title">${localize("SIPD.Dialog.PreviewTitle")}</span>
               <span class="sipd-panel-hint">${localize("SIPD.Dialog.Summary", {width, height})}</span>
             </div>
-            <span class="sipd-pill is-type">${localize("SIPD.Dialog.PreviewBadge")}</span>
+            <span class="sipd-pill is-type">${localize(remoteUrl ? "SIPD.Dialog.PreviewBadgeLinked" : "SIPD.Dialog.PreviewBadge")}</span>
           </header>
           <div class="sipd-dialog__preview">
             <img alt="${escapeHtml(defaultName)}" data-preview-image>
@@ -807,7 +938,7 @@ async function promptForAction({previewUrl, defaultName, width, height}) {
               <label>${localize("SIPD.Dialog.Action")}</label>
               <div class="form-fields">
                 <select name="action">
-                  ${actionOptionsMarkup(defaults.action)}
+                  ${actionOptionsMarkup(defaults.action, {remoteUrl})}
                 </select>
               </div>
             </div>
@@ -886,25 +1017,25 @@ function uploadDirectoryOptionsMarkup(choices=[]) {
   return choices.map(choice => `<option value="${escapeHtml(choice)}"></option>`).join("");
 }
 
-function actionOptionsMarkup(selectedAction=null) {
-  return getActionChoices().map(({value, label, disabled}) => {
+function actionOptionsMarkup(selectedAction=null, {remoteUrl=false}={}) {
+  return getActionChoices({remoteUrl}).map(({value, label, disabled}) => {
     const disabledAttribute = disabled ? " disabled" : "";
     const selectedAttribute = value === selectedAction ? " selected" : "";
     return `<option value="${value}"${disabledAttribute}${selectedAttribute}>${escapeHtml(label)}</option>`;
   }).join("");
 }
 
-function getActionChoices() {
+function getActionChoices({remoteUrl=false}={}) {
   const hasScene = hasCanvasScene();
   const allowedActions = new Set(getPermittedActions());
   return getAllActionChoices().map(choice => ({
     ...choice,
-    disabled: [
+    disabled: ([
       ACTIONS.SCENE_BACKGROUND_CURRENT,
       ACTIONS.SCENE_FOREGROUND_CURRENT,
       ACTIONS.TILE_CENTERED,
       ACTIONS.TILE_FIT
-    ].includes(choice.value) ? !hasScene : false
+    ].includes(choice.value) && !hasScene) || (remoteUrl && !REMOTE_URL_ACTIONS.includes(choice.value))
   })).filter(choice => allowedActions.has(choice.value));
 }
 
@@ -1012,8 +1143,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
   updateFields();
 }
 
-function getDialogDefaults() {
-  const choices = getActionChoices();
+function getDialogDefaults({remoteUrl=false}={}) {
+  const choices = getActionChoices({remoteUrl});
   const preferredAction = game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING)
     ? game.settings.get(MODULE_ID, LAST_ACTION_SETTING)
     : game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING);
@@ -1448,29 +1579,68 @@ function createDefaultLevelData(scene) {
   };
 }
 
-async function createTileFromImage({name, path, width, height}, {fitToScene}) {
+async function createTileFromImage({name, path, width, height, dropPoint=null}, {fitToScene}) {
   if ( !hasCanvasScene() ) {
     throw new Error(localize("SIPD.Error.NoScene"));
   }
 
   const rect = canvas.dimensions.sceneRect;
   const tileSize = fitToScene ? fitDimensions(width, height, rect.width, rect.height) : {width, height};
-  const x = Math.round(rect.x + ((rect.width - tileSize.width) / 2));
-  const y = Math.round(rect.y + ((rect.height - tileSize.height) / 2));
+  const size = {width: Math.max(1, Math.round(tileSize.width)), height: Math.max(1, Math.round(tileSize.height))};
+  // Pasted images and fitted tiles stay centered on the scene
+  const point = (!fitToScene && (dropPoint?.sceneId === canvas.scene.id)) ? dropPoint : null;
+  const {x, y} = getTilePosition(size, rect, point);
 
   const levels = getViewedLevelIds(canvas.scene);
   const [tile] = await canvas.scene.createEmbeddedDocuments("Tile", [{
     name,
     x,
     y,
-    width: Math.max(1, Math.round(tileSize.width)),
-    height: Math.max(1, Math.round(tileSize.height)),
+    width: size.width,
+    height: size.height,
     texture: {src: path},
     ...(levels ? {levels} : {})
   }]);
 
   ui.notifications.info(localize("SIPD.Notification.TileCreated", {name: tile?.name ?? name}));
   return tile;
+}
+
+// Canvas point of a drop onto the board. Shift skips grid snapping, as in Foundry's own tile drop.
+function getCanvasDropPoint(event) {
+  const board = globalThis.canvas?.app?.view;
+  if ( !hasCanvasScene() || !board || (event?.target !== board) ) return null;
+  const point = canvas.canvasCoordinatesFromClient?.({x: event.clientX, y: event.clientY});
+  if ( !Number.isFinite(point?.x) || !Number.isFinite(point?.y) ) return null;
+  return {x: point.x, y: point.y, sceneId: canvas.scene.id, snap: !event.shiftKey};
+}
+
+// x/y of a new tile centered on a point (or on the scene) and kept inside the scene rect.
+// v13 positions tiles by their top-left corner, v14 by the texture anchor, which defaults to the center.
+function getTilePosition(size, rect, point=null) {
+  const offset = tilesUseAnchorPosition() ? {x: size.width / 2, y: size.height / 2} : {x: 0, y: 0};
+  let left = rect.x + ((rect.width - size.width) / 2);
+  let top = rect.y + ((rect.height - size.height) / 2);
+
+  if ( point ) {
+    let origin = {x: point.x - (size.width / 2) + offset.x, y: point.y - (size.height / 2) + offset.y};
+    // Foundry snaps the same point when it creates a tile from a drop
+    if ( point.snap && (typeof canvas.tiles?.getSnappedPoint === "function") ) origin = canvas.tiles.getSnappedPoint(origin);
+    left = clampSpan(origin.x - offset.x, size.width, rect.x, rect.width);
+    top = clampSpan(origin.y - offset.y, size.height, rect.y, rect.height);
+  }
+
+  return {x: Math.round(left + offset.x), y: Math.round(top + offset.y)};
+}
+
+function tilesUseAnchorPosition() {
+  return Number(globalThis.game?.release?.generation) >= 14;
+}
+
+// Keeps a span inside a range. A span longer than the range stays centered on it.
+function clampSpan(start, length, rangeStart, rangeLength) {
+  if ( length >= rangeLength ) return rangeStart + ((rangeLength - length) / 2);
+  return Math.min(Math.max(start, rangeStart), rangeStart + rangeLength - length);
 }
 
 function fitDimensions(width, height, maxWidth, maxHeight) {
@@ -1560,6 +1730,7 @@ export const __test__ = {
   WINDOW_KEYS,
   ACTIONS,
   PLAYER_SELECTABLE_ACTIONS,
+  REMOTE_URL_ACTIONS,
   PLAYER_UPLOAD_DIRECTORY,
   SHARED_UPLOAD_DIRECTORY,
   getAllActionChoices,
@@ -1578,9 +1749,12 @@ export const __test__ = {
   onDrop,
   isEditableTarget,
   extractClipboardImage,
+  extractClipboardImageUrl,
+  parseImageUrl,
   hasTransferableImage,
   extractDroppedImage,
   fetchDroppedImage,
+  createFetchFailedError,
   guessMimeTypeFromUri,
   fileNameFromUri,
   canCurrentUserUseTool,
@@ -1588,7 +1762,12 @@ export const __test__ = {
   canUserPerformAction,
   canUserShareImages,
   getPermittedActions,
+  importImage,
   handleImportedImage,
+  handleRemoteImageUrl,
+  confirmRemoteImageUrl,
+  getUrlHostLabel,
+  promptForImportDecision,
   requiresPersistentPath,
   normalizeActionDecision,
   defaultUploadDirectory,
@@ -1648,6 +1827,10 @@ export const __test__ = {
   getTargetLevelData,
   getViewedLevelIds,
   createTileFromImage,
+  getCanvasDropPoint,
+  getTilePosition,
+  tilesUseAnchorPosition,
+  clampSpan,
   fitDimensions,
   createJournalEntryFromImage,
   shareImageToPlayers,
