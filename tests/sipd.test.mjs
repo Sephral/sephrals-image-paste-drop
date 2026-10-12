@@ -553,7 +553,37 @@ test("action execution and scene or journal helpers cover all variants", async (
   await __test__.applyImageToSceneLevel(v14Scene, { path: "new.png", width: 100, height: 80 });
   await __test__.applyImageToSceneForeground(v14Scene, { path: "fg.png" });
   assert.equal(__test__.supportsSceneLevels(v14Scene), true);
+  assert.equal(v14Scene.updateCalls[0].levels[0].background.src, "new.png");
+  assert.equal("initialLevel" in v14Scene.updateCalls[0], false);
   assert.equal(__test__.createDefaultLevelData({ constructor: { metadata: { defaultLevelId: "level-2" } } })._id, "level-2");
+
+  // The viewed level wins over the initial level, other levels are left alone.
+  const previousCanvasScene = env.canvas.scene;
+  const previousCanvasLevel = env.canvas.level;
+  const multiLevelScene = {
+    initialLevel: { toObject: () => ({ _id: "ground", background: {}, foreground: {} }) },
+    updateCalls: [],
+    async update(data) {
+      this.updateCalls.push(data);
+    },
+    constructor: { metadata: { defaultLevelId: "ground" } }
+  };
+  env.canvas.scene = multiLevelScene;
+  env.canvas.level = { id: "upper", toObject: () => ({ _id: "upper", background: {}, foreground: {} }) };
+  await __test__.applyImageToSceneForeground(multiLevelScene, { path: "upper-fg.png" });
+  assert.deepEqual(multiLevelScene.updateCalls[0].levels.map((level) => level._id), ["upper"]);
+  assert.equal(multiLevelScene.updateCalls[0].levels[0].foreground.src, "upper-fg.png");
+  assert.equal("initialLevel" in multiLevelScene.updateCalls[0], false);
+  assert.deepEqual(__test__.getViewedLevelIds(multiLevelScene), ["upper"]);
+  assert.equal(__test__.getViewedLevelIds(v13Scene), null);
+
+  // A v14 scene without any level gets the default level and points its initial level at it.
+  const emptyScene = { updateCalls: [], async update(data) { this.updateCalls.push(data); }, constructor: { metadata: { defaultLevelId: "level-0" } } };
+  env.canvas.scene = null;
+  await __test__.applyImageToSceneForeground(emptyScene, { path: "fg.png" });
+  assert.equal(emptyScene.updateCalls[0].initialLevel, "level-0");
+  env.canvas.scene = previousCanvasScene;
+  env.canvas.level = previousCanvasLevel;
 
   env.canvas.ready = true;
   env.canvas.scene = {

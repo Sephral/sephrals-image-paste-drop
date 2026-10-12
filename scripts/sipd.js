@@ -1364,7 +1364,7 @@ async function applyImageToSceneLevel(scene, {path, width, height}) {
     return;
   }
 
-  const level = scene.initialLevel?.toObject?.() ?? createDefaultLevelData(scene);
+  const {level, isNew} = getTargetLevelData(scene);
   level.background ??= {};
   level.background.src = path;
 
@@ -1373,7 +1373,7 @@ async function applyImageToSceneLevel(scene, {path, width, height}) {
     height,
     padding: 0,
     levels: [level],
-    initialLevel: level._id
+    ...(isNew ? {initialLevel: level._id} : {})
   });
 }
 
@@ -1383,18 +1383,33 @@ async function applyImageToSceneForeground(scene, {path}) {
     return;
   }
 
-  const level = scene.initialLevel?.toObject?.() ?? createDefaultLevelData(scene);
+  const {level, isNew} = getTargetLevelData(scene);
   level.foreground ??= {};
   level.foreground.src = path;
 
   await scene.update({
     levels: [level],
-    initialLevel: level._id
+    ...(isNew ? {initialLevel: level._id} : {})
   });
 }
 
 function supportsSceneLevels(scene) {
   return Boolean(scene?.constructor?.metadata?.defaultLevelId);
+}
+
+// The level the GM is looking at, else the scene's initial level. Level updates merge by _id, other levels stay.
+function getTargetLevelData(scene) {
+  const viewedLevel = (scene === globalThis.canvas?.scene) ? globalThis.canvas?.level : null;
+  const level = viewedLevel ?? scene.initialLevel;
+  if ( level?.toObject ) return {level: level.toObject(), isNew: false};
+  return {level: createDefaultLevelData(scene), isNew: true};
+}
+
+// v14 tiles with an empty levels list show on every level, so pin new tiles to the viewed level.
+function getViewedLevelIds(scene) {
+  if ( !supportsSceneLevels(scene) || (scene !== globalThis.canvas?.scene) ) return null;
+  const levelId = globalThis.canvas?.level?.id;
+  return levelId ? [levelId] : null;
 }
 
 function createDefaultLevelData(scene) {
@@ -1443,13 +1458,15 @@ async function createTileFromImage({name, path, width, height}, {fitToScene}) {
   const x = Math.round(rect.x + ((rect.width - tileSize.width) / 2));
   const y = Math.round(rect.y + ((rect.height - tileSize.height) / 2));
 
+  const levels = getViewedLevelIds(canvas.scene);
   const [tile] = await canvas.scene.createEmbeddedDocuments("Tile", [{
     name,
     x,
     y,
     width: Math.max(1, Math.round(tileSize.width)),
     height: Math.max(1, Math.round(tileSize.height)),
-    texture: {src: path}
+    texture: {src: path},
+    ...(levels ? {levels} : {})
   }]);
 
   ui.notifications.info(localize("SIPD.Notification.TileCreated", {name: tile?.name ?? name}));
@@ -1628,6 +1645,8 @@ export const __test__ = {
   applyImageToSceneForeground,
   supportsSceneLevels,
   createDefaultLevelData,
+  getTargetLevelData,
+  getViewedLevelIds,
   createTileFromImage,
   fitDimensions,
   createJournalEntryFromImage,
