@@ -12,7 +12,7 @@ const releaseRoot = path.join(rootDir, ".release");
 const packageDir = path.join(releaseRoot, "package");
 
 const optionalEntries = ["templates"];
-const requiredEntries = ["LICENSE.md", "README.md", "lang", "scripts", "styles"];
+const requiredEntries = ["LICENSE.md", "MANUAL.md", "README.md", "lang", "scripts", "styles"];
 
 async function pathExists(relativePath) {
   try {
