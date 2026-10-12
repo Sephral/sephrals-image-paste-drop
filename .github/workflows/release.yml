@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -81,3 +83,14 @@ jobs:
           FOUNDRY_RELEASE_TOKEN: ${{ secrets.FOUNDRY_RELEASE_TOKEN }}
           RELEASE_TAG: ${{ steps.metadata.outputs.tag_name }}
         run: node build/publish-foundry-release.mjs
+
+      - name: Announce release on Discord
+        env:
+          DISCORD_WEBHOOK_MODULE: ${{ secrets.DISCORD_WEBHOOK_MODULE }}
+          DISCORD_WEBHOOK_RELEASES: ${{ secrets.DISCORD_WEBHOOK_RELEASES }}
+          FOUNDRY_LISTED: ${{ secrets.FOUNDRY_RELEASE_TOKEN != '' }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag_name }}
+        shell: bash
+        run: |
+          git fetch --force --quiet origin "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          node build/announce-discord.mjs
