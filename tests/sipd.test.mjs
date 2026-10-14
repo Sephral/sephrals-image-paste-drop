@@ -92,7 +92,13 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 16);
+  assert.equal(env.state.registerCalls.length, 20);
+  const maxSize = env.state.registerCalls.find((entry) => entry.key === __test__.MAX_IMAGE_SIZE_SETTING);
+  assert.equal(maxSize.data.default, 0);
+  assert.deepEqual(Object.keys(maxSize.data.choices), ["0", "2048", "4096", "8192"]);
+  assert.equal(env.state.registerCalls.find((entry) => entry.key === __test__.CONVERT_WEBP_SETTING).data.default, false);
+  assert.equal(env.state.registerCalls.find((entry) => entry.key === __test__.WEBP_QUALITY_SETTING).data.default, 85);
+  assert.equal(env.hooks.onHandlers.get("renderChatMessageHTML").length, 1);
   const storageFolder = env.state.registerCalls.find((entry) => entry.key === __test__.STORAGE_FOLDER_SETTING);
   assert.equal(storageFolder.data.scope, "world");
   assert.equal(storageFolder.data.default, "");
@@ -118,7 +124,7 @@ test("registers all settings on init and event listeners on ready", async () => 
 
 test("action and theme choice helpers expose localized maps", () => {
   const actionChoices = __test__.getAllActionChoices();
-  assert.equal(actionChoices.length, 9);
+  assert.equal(actionChoices.length, 13);
   assert.equal(__test__.getActionSettingChoices()[__test__.ACTIONS.SHARE_IMAGE], "Share Image");
   assert.equal(__test__.getThemeSettingChoices()[__test__.UI_THEMES.FOUNDRY], "Foundry");
   assert.equal(__test__.localize("SIPD.Notification.Uploaded", { path: "abc" }), "uploaded abc");
@@ -349,7 +355,10 @@ test("user access, directory, and naming helpers normalize values and permission
     uploadDirectory: __test__.PLAYER_UPLOAD_DIRECTORY,
     shareToPlayers: false,
     activateScene: false,
-    navigation: false
+    navigation: false,
+    recipients: [],
+    prototypeToken: false,
+    chatMode: "current"
   });
 
   assert.equal(__test__.requiresPersistentPath(__test__.ACTIONS.PREVIEW_ONLY, false), false);
@@ -428,7 +437,10 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     uploadDirectory: "custom",
     shareToPlayers: true,
     activateScene: false,
-    navigation: true
+    navigation: true,
+    recipients: [],
+    prototypeToken: false,
+    chatMode: "current"
   });
   assert.match(env.state.lastDialogOptions.content, /sipd-shell/);
 });
@@ -523,7 +535,10 @@ test("upload helpers cover permissions, reuse, existing files, directory creatio
   const reusablePath = await __test__.uploadClipboardFile(createImageFile("image.png"), {
     targetPath: { directory: "custom", fileName: "target.png" }
   });
-  assert.equal(reusablePath, env.state.uploadResponse.path);
+  // A reused file name gets a version query from its content, so a replaced image gets a new URL
+  const reusedFile = createImageFile("image.png");
+  const version = (await __test__.hashFileContent(reusedFile)).slice(0, 12);
+  assert.equal(reusablePath, `${env.state.uploadResponse.path}?v=${version}`);
   assert.equal(env.state.uploadCalls[0].target, "worlds/world-id/sephrals-image-paste-drop/custom");
 
   env.reset();
@@ -750,11 +765,13 @@ test("player targets need the GM whitelist and the matching Foundry permissions"
   assert.equal(__test__.canUserShareImages(), false);
 
   env.state.filesUploadPermission = true;
-  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY]);
+  const uploadTargets = [ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT, ACTIONS.CHAT_IMAGE, ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY];
+  assert.deepEqual(__test__.getPermittedActions(), uploadTargets);
   env.state.permissions.JOURNAL_CREATE = true;
-  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY]);
+  assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ...uploadTargets]);
   assert.equal(__test__.canUserPerformAction(ACTIONS.SCENE_BACKGROUND), false);
   assert.equal(__test__.canUserPerformAction(ACTIONS.TILE_FIT), false);
+  assert.equal(__test__.canUserPerformAction(ACTIONS.MAP_PIN), false);
 
   setSetting(__test__.PLAYER_ACTIONS_SETTING, [ACTIONS.JOURNAL_IMAGE]);
   assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ACTIONS.PREVIEW_ONLY]);
@@ -1000,7 +1017,8 @@ test("an image URL that cannot be downloaded can be linked for journal pages, sh
   env.canvas.scene = { id: "scene-1", name: "Scene One", constructor: { metadata: {} } };
 
   const remoteChoices = __test__.getActionChoices({ remoteUrl: true });
-  assert.deepEqual(remoteChoices.filter((choice) => !choice.disabled).map((choice) => choice.value), [...__test__.REMOTE_URL_ACTIONS]);
+  // Without a selected token or character the portrait target stays unavailable
+  assert.deepEqual(remoteChoices.filter((choice) => !choice.disabled).map((choice) => choice.value), __test__.REMOTE_URL_ACTIONS.filter((action) => action !== ACTIONS.ACTOR_PORTRAIT));
   assert.equal(__test__.getActionChoices().find((choice) => choice.value === ACTIONS.TILE_CENTERED).disabled, false);
   assert.equal(__test__.getDialogDefaults({ remoteUrl: true }).action, ACTIONS.JOURNAL_IMAGE);
   assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TILE_CENTERED }, { remoteUrl: true }).action, ACTIONS.PREVIEW_ONLY);
@@ -1139,4 +1157,587 @@ test("tiles dropped on the canvas are centered on the drop point inside the scen
     delete env.canvas.tiles;
     delete env.game.release;
   }
+});
+function batchForm(values) {
+  return {
+    form: {
+      elements: {
+        name: { value: values.name ?? "Batch" },
+        action: { value: values.action },
+        uploadDirectory: { value: values.uploadDirectory ?? "custom" },
+        navigation: { checked: Boolean(values.navigation) },
+        chatMode: { value: values.chatMode ?? "current" }
+      }
+    }
+  };
+}
+
+// Runs the batch dialog callback, or returns the plain decision for the single image dialog
+function answerDialogs(batchValues, singleDecision = null) {
+  const dialogs = [];
+  env.state.dialogWaitResult = (options) => {
+    dialogs.push(options);
+    if ( /sipd-batch-grid/.test(options.content) ) return options.buttons[0].callback(null, batchForm(batchValues));
+    return singleDecision;
+  };
+  return dialogs;
+}
+
+function createBatchScene(extra = {}) {
+  return {
+    id: "scene-1",
+    name: "Scene One",
+    constructor: { metadata: {} },
+    tileDocs: [],
+    notes: [],
+    async createEmbeddedDocuments(type, docs) {
+      if ( type === "Note" ) this.notes.push(...docs);
+      else this.tileDocs.push(...docs);
+      return docs;
+    },
+    ...extra
+  };
+}
+
+test("pasting several images opens the batch dialog and creates one journal entry with a page each", async () => {
+  const { BATCH_ACTIONS } = __test__;
+  const dialogs = answerDialogs({ name: "Handouts", action: BATCH_ACTIONS.JOURNAL_PAGES });
+  let upload = 0;
+  env.state.uploadResponse = null;
+  const originalUpload = foundry.applications.apps.FilePicker.implementation.upload;
+  foundry.applications.apps.FilePicker.implementation.upload = async (source, target, file) => {
+    env.state.uploadCalls.push({ source, target, file });
+    upload += 1;
+    return { path: `${target}/${upload}.png` };
+  };
+
+  try {
+    const event = {
+      target: new TestHTMLElement(),
+      clipboardData: {
+        items: [
+          { kind: "file", type: "image/png", getAsFile: () => createImageFile("cave.png", "image/png", "one") },
+          { kind: "string", type: "text/plain", getAsFile: () => null },
+          { kind: "file", type: "image/png", getAsFile: () => createImageFile("image.png", "image/png", "two") }
+        ],
+        getData: () => ""
+      },
+      preventDefault() {
+        this.prevented = true;
+      },
+      stopPropagation() {}
+    };
+    await __test__.onPaste(event);
+
+    assert.equal(event.prevented, true);
+    assert.equal(dialogs.length, 1);
+    assert.match(dialogs[0].content, /data-batch-thumb="1"/);
+    assert.match(dialogs[0].content, /value="batch-journal-pages" selected/);
+    assert.equal(env.state.uploadCalls.length, 2);
+    const entry = env.state.journalCreates[0];
+    assert.equal(entry.name, "Handouts");
+    assert.deepEqual(entry.pages.map((page) => [page.name, page.src, page.sort]), [
+      ["cave", "worlds/world-id/sephrals-image-paste-drop/custom/1.png", 100000],
+      ["Handouts 2", "worlds/world-id/sephrals-image-paste-drop/custom/2.png", 200000]
+    ]);
+    assert.deepEqual(env.state.revokedUrls, ["blob:1", "blob:2"]);
+    assert.equal(env.state.settingWrites.find((entry) => entry.key === __test__.LAST_BATCH_ACTION_SETTING).value, BATCH_ACTIONS.JOURNAL_PAGES);
+  } finally {
+    foundry.applications.apps.FilePicker.implementation.upload = originalUpload;
+  }
+});
+
+test("batch dialog wiring shows thumbnails and the options of the chosen target", () => {
+  const { ACTIONS } = __test__;
+  const form = new TestHTMLElement();
+  const thumbs = [new TestHTMLElement(), new TestHTMLElement()];
+  const rows = { uploadDirectory: new TestHTMLElement(), chatMode: new TestHTMLElement(), navigation: new TestHTMLElement() };
+  const actionField = { value: ACTIONS.UPLOAD_DIRECTORY, listeners: [], addEventListener(_type, handler) { this.listeners.push(handler); } };
+  form.elements = { action: actionField };
+  thumbs.forEach((thumb, index) => form.setQuerySelector(`[data-batch-thumb="${index}"]`, thumb));
+  for ( const [key, row] of Object.entries(rows) ) form.setQuerySelector(`[data-option-row="${key}"]`, row);
+  const element = new TestHTMLElement();
+  element.setQuerySelector("form", form);
+
+  __test__.configureBatchDialogForm({ element, position: {} }, __test__.UI_THEMES.FOUNDRY, [{ objectUrl: "blob:a" }, { objectUrl: "blob:b" }]);
+  assert.deepEqual(thumbs.map((thumb) => thumb.src), ["blob:a", "blob:b"]);
+  assert.equal(element.classList.contains("sipd-batch-dialog"), true);
+  assert.deepEqual([rows.uploadDirectory.hidden, rows.chatMode.hidden, rows.navigation.hidden], [false, true, true]);
+
+  actionField.value = ACTIONS.SCENE_BACKGROUND;
+  actionField.listeners[0]();
+  assert.deepEqual([rows.uploadDirectory.hidden, rows.chatMode.hidden, rows.navigation.hidden], [true, true, false]);
+  actionField.value = ACTIONS.CHAT_IMAGE;
+  actionField.listeners[0]();
+  assert.deepEqual([rows.uploadDirectory.hidden, rows.chatMode.hidden, rows.navigation.hidden], [true, false, true]);
+});
+
+test("batch targets follow the player permissions and the scene state", () => {
+  const { ACTIONS, BATCH_ACTIONS } = __test__;
+  const values = () => __test__.getBatchActionChoices().map((choice) => [choice.value, choice.disabled]);
+  assert.deepEqual(values(), [
+    [BATCH_ACTIONS.JOURNAL_PAGES, false],
+    [BATCH_ACTIONS.TILE_GRID, true],
+    [ACTIONS.JOURNAL_IMAGE, false],
+    [ACTIONS.SCENE_BACKGROUND, false],
+    [ACTIONS.CHAT_IMAGE, false],
+    [ACTIONS.UPLOAD_DIRECTORY, false]
+  ]);
+  assert.equal(__test__.normalizeBatchDecision({ action: BATCH_ACTIONS.TILE_GRID }), null);
+  assert.equal(__test__.normalizeBatchDecision(null), null);
+  assert.deepEqual(__test__.normalizeBatchDecision({ name: " ", action: ACTIONS.CHAT_IMAGE, chatMode: "public", navigation: true, uploadDirectory: "x" }).chatMode, "public");
+  assert.equal(__test__.normalizeBatchDecision({ action: ACTIONS.SCENE_BACKGROUND, navigation: true }).navigation, true);
+
+  enablePlayerTargets(ACTIONS.JOURNAL_IMAGE, ACTIONS.CHAT_IMAGE);
+  assert.deepEqual(values(), [[ACTIONS.CHAT_IMAGE, false]]);
+  assert.equal(__test__.normalizeBatchDecision({ action: ACTIONS.CHAT_IMAGE, uploadDirectory: "elsewhere" }).uploadDirectory, __test__.PLAYER_UPLOAD_DIRECTORY);
+  env.state.permissions.JOURNAL_CREATE = true;
+  assert.equal(values()[0][0], BATCH_ACTIONS.JOURNAL_PAGES);
+
+  // A player without upload permission gets no batch target at all
+  env.state.filesUploadPermission = false;
+  assert.deepEqual(values(), []);
+});
+
+test("a batch without any usable target warns and a batch of failing links falls back to one image", async () => {
+  enablePlayerTargets();
+  await __test__.handleImportedBatch([createImageFile("a.png", "image/png", "a"), createImageFile("b.png", "image/png", "b")]);
+  assert.equal(env.state.notifications.warn.at(-1), "SIPD.Notification.BatchUnavailable");
+  assert.equal(env.state.lastDialogOptions, null);
+  assert.deepEqual(env.state.revokedUrls, ["blob:1", "blob:2"]);
+
+  env.reset();
+  const fetched = [];
+  env.state.fetchImpl = async (url) => {
+    fetched.push(url);
+    if ( url.includes("broken") ) return { ok: false };
+    return { ok: true, blob: async () => new Blob(["img"], { type: "image/png" }) };
+  };
+  const dialogs = answerDialogs({}, { name: "Single", action: __test__.ACTIONS.PREVIEW_ONLY });
+  await __test__.onDrop({
+    target: new TestHTMLElement(),
+    dataTransfer: {
+      files: [],
+      items: [],
+      types: ["text/uri-list"],
+      getData: (type) => type === "text/uri-list" ? "https://a.test/broken.png\nhttps://a.test/fine.png" : ""
+    },
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  assert.deepEqual(fetched, ["https://a.test/broken.png", "https://a.test/fine.png"]);
+  assert.equal(env.state.notifications.warn.at(-1), "SIPD.Notification.BatchSkipped");
+  assert.equal(dialogs.length, 1);
+  assert.doesNotMatch(dialogs[0].content, /sipd-batch-grid/);
+  assert.equal(env.state.imagePopouts.length, 1);
+
+  env.state.fetchImpl = async () => ({ ok: false });
+  await assert.rejects(() => __test__.importImageBatch(["https://a.test/x.png", "https://a.test/y.png"]), /drop fetch failed/);
+});
+
+test("a batch of files with only one readable image opens the single image dialog", async () => {
+  env.state.imageBehavior.failSources = ["blob:1"];
+  const dialogs = answerDialogs({}, { name: "Single", action: __test__.ACTIONS.PREVIEW_ONLY });
+  await __test__.handleImportedBatch([createImageFile("broken.png", "image/png", "x"), createImageFile("fine.png", "image/png", "y")]);
+  assert.equal(env.state.notifications.warn.at(-1), "SIPD.Notification.BatchSkipped");
+  assert.equal(dialogs.length, 1);
+  assert.doesNotMatch(dialogs[0].content, /sipd-batch-grid/);
+  assert.equal(env.state.imagePopouts.length, 1);
+  // The object URLs of the batch are released, the preview keeps its own
+  assert.equal(env.state.revokedUrls.includes("blob:2"), true);
+});
+
+test("several pasted image links become a batch, mixed text stays a normal paste", async () => {
+  assert.deepEqual(__test__.extractClipboardImageUrls(createPasteEvent("https://a.test/1.png\nhttps://a.test/2.webp")), ["https://a.test/1.png", "https://a.test/2.webp"]);
+  assert.deepEqual(__test__.extractClipboardImageUrls(createPasteEvent("https://a.test/1.png\nnotes")), []);
+  assert.deepEqual(__test__.extractDroppedImageUrls({ getData: () => "https://a.test/1.png\n#c\nhttps://a.test/2.png" }), ["https://a.test/1.png", "https://a.test/2.png"]);
+  const files = [createImageFile("a.png"), new File(["t"], "notes.txt", { type: "text/plain" }), createImageFile("b.png")];
+  assert.deepEqual(__test__.extractDroppedImageFiles({ items: [], files }).map((file) => file.name), ["a.png", "b.png"]);
+  assert.equal(__test__.collectImageFiles(null).length, 0);
+
+  const dialogs = answerDialogs({ action: __test__.ACTIONS.UPLOAD_DIRECTORY, uploadDirectory: "maps" });
+  env.state.uploadResponse = { path: "worlds/world-id/sephrals-image-paste-drop/maps/x.png" };
+  const paste = createPasteEvent("https://a.test/1.png\nhttps://a.test/2.png");
+  await __test__.onPaste(paste);
+  assert.equal(paste.prevented, true);
+  assert.equal(dialogs.length, 1);
+  assert.equal(env.state.uploadCalls.length, 2);
+  assert.equal(env.state.uploadCalls[0].target, "worlds/world-id/sephrals-image-paste-drop/maps");
+  assert.equal(env.state.notifications.info.at(-1), "SIPD.Notification.BatchUploaded");
+  assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.DEFAULT_UPLOAD_DIRECTORY_SETTING && entry.value === "maps"), true);
+});
+
+test("dropped text without a link is left to Foundry", async () => {
+  let prevented = false;
+  let fetched = false;
+  env.state.fetchImpl = async () => { fetched = true; return { ok: false }; };
+  await __test__.onDrop({
+    target: new TestHTMLElement(),
+    dataTransfer: { files: [], items: [], types: ["text/plain", "text/html"], getData: (type) => type === "text/plain" ? "hello world" : (type === "text/html" ? "<b>hello</b> world" : "") },
+    preventDefault() { prevented = true; },
+    stopPropagation() {}
+  });
+  assert.equal(prevented, false);
+  assert.equal(fetched, false);
+  assert.equal(env.state.notifications.error.length, 0);
+});
+
+test("the same image link pasted on two lines is imported as one image", async () => {
+  const fetched = [];
+  env.state.fetchImpl = async (url) => {
+    fetched.push(url);
+    return { ok: true, blob: async () => new Blob(["img"], { type: "image/png" }) };
+  };
+  const dialogs = answerDialogs({}, { name: "Single", action: __test__.ACTIONS.PREVIEW_ONLY });
+  const paste = createPasteEvent("https://a.test/1.png\nhttps://a.test/1.png");
+  await __test__.onPaste(paste);
+  assert.equal(paste.prevented, true);
+  assert.deepEqual(fetched, ["https://a.test/1.png"]);
+  assert.equal(dialogs.length, 1);
+  assert.doesNotMatch(dialogs[0].content, /sipd-batch-grid/);
+  assert.equal(env.state.notifications.error.length, 0);
+  assert.equal(env.state.imagePopouts.length, 1);
+});
+
+test("a batch dropped on the canvas becomes a tile grid around the drop point on the viewed level", async () => {
+  const board = new TestHTMLElement();
+  const scene = createBatchScene({ constructor: { metadata: { defaultLevelId: "ground" } } });
+  env.canvas.ready = true;
+  env.canvas.scene = scene;
+  env.canvas.level = { id: "upper" };
+  env.canvas.app = { view: board };
+  env.canvas.canvasCoordinatesFromClient = ({ x, y }) => ({ x, y });
+  env.canvas.dimensions.size = 50;
+  env.state.imageBehavior = { width: 200, height: 100, error: false };
+  env.state.uploadResponse = { path: "tile.png" };
+  answerDialogs({ action: __test__.BATCH_ACTIONS.TILE_GRID });
+
+  try {
+    await __test__.onDrop({
+      target: board,
+      clientX: 500,
+      clientY: 400,
+      shiftKey: false,
+      dataTransfer: { files: [createImageFile("a.png", "image/png", "a"), createImageFile("b.png", "image/png", "b")], items: [], types: [], getData: () => "" },
+      preventDefault() {},
+      stopPropagation() {}
+    });
+    assert.deepEqual(scene.tileDocs.map((doc) => [doc.name, doc.x, doc.y, doc.width, doc.height]), [["a", 275, 350, 200, 100], ["b", 525, 350, 200, 100]]);
+    assert.deepEqual(scene.tileDocs[0].levels, ["upper"]);
+    assert.equal(env.state.notifications.info.at(-1), "SIPD.Notification.BatchTilesCreated");
+  } finally {
+    delete env.canvas.level;
+    delete env.canvas.app;
+    delete env.canvas.canvasCoordinatesFromClient;
+    delete env.canvas.dimensions.size;
+  }
+});
+
+test("batch targets create one scene, journal entry or chat post per image", async () => {
+  const { ACTIONS } = __test__;
+  const items = [{ name: "One", path: "1.png", width: 100, height: 50 }, { name: "Two", path: "2.png", width: 80, height: 40 }];
+
+  await __test__.executeBatchAction({ action: ACTIONS.SCENE_BACKGROUND, name: "Maps", navigation: true, items });
+  assert.deepEqual(env.state.sceneCreates.map((data) => [data.name, data.active, data.navigation]), [["One", false, true], ["Two", false, true]]);
+  assert.deepEqual(env.state.notifications.info, ["SIPD.Notification.BatchScenesCreated"]);
+
+  await __test__.executeBatchAction({ action: ACTIONS.JOURNAL_IMAGE, name: "Maps", items });
+  assert.deepEqual(env.state.journalCreates.map((data) => data.pages[0].src), ["1.png", "2.png"]);
+
+  await __test__.executeBatchAction({ action: ACTIONS.CHAT_IMAGE, name: "Maps", chatMode: "public", items });
+  assert.match(env.state.chatCreates[0].content, /<img src="1\.png" alt="One"><img src="2\.png" alt="Two">/);
+
+  await assert.rejects(() => __test__.executeBatchAction({ action: "bogus", items }), /unsupported action/);
+  await assert.rejects(() => __test__.createTileGrid({ items }), /no scene/);
+});
+
+function createTokenScene() {
+  const scene = createBatchScene({
+    tokenUpdates: [],
+    async updateEmbeddedDocuments(type, updates) {
+      this.tokenUpdates.push({ type, updates });
+      return updates;
+    }
+  });
+  env.canvas.ready = true;
+  env.canvas.scene = scene;
+  return scene;
+}
+
+function createActor(id, { owner = true } = {}) {
+  return {
+    id,
+    uuid: `Actor.${id}`,
+    name: `Actor ${id}`,
+    isOwner: owner,
+    updates: [],
+    async update(data) {
+      this.updates.push(data);
+    }
+  };
+}
+
+test("token images change the selected tokens and the prototype of linked ones", async () => {
+  const { ACTIONS } = __test__;
+  const scene = createTokenScene();
+  const hero = createActor("hero");
+  const goblin = createActor("goblin", { owner: false });
+  env.canvas.tokens = {
+    controlled: [
+      { document: { id: "t1", isOwner: true, actorLink: true }, actor: hero },
+      { document: { id: "t2", isOwner: false, actorLink: false }, actor: goblin }
+    ]
+  };
+
+  try {
+    assert.equal(__test__.isActionAvailable(ACTIONS.TOKEN_IMAGE), true);
+    await __test__.executeAction({ action: ACTIONS.TOKEN_IMAGE, path: "token.webp", name: "Token", prototypeToken: true });
+    assert.deepEqual(scene.tokenUpdates[0], { type: "Token", updates: [{ _id: "t1", "texture.src": "token.webp" }, { _id: "t2", "texture.src": "token.webp" }] });
+    assert.deepEqual(hero.updates, [{ "prototypeToken.texture.src": "token.webp" }]);
+    assert.deepEqual(goblin.updates, []);
+
+    // Players only change tokens of actors they own, and the prototype only on request
+    enablePlayerTargets(ACTIONS.TOKEN_IMAGE);
+    hero.updates = [];
+    await __test__.updateTokenImages({ path: "mine.png", prototypeToken: false });
+    assert.deepEqual(scene.tokenUpdates[1].updates, [{ _id: "t1", "texture.src": "mine.png" }]);
+    assert.deepEqual(hero.updates, []);
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, prototypeToken: true }).prototypeToken, true);
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.CHAT_IMAGE, prototypeToken: true }).action, ACTIONS.PREVIEW_ONLY);
+
+    env.canvas.tokens.controlled = [];
+    assert.equal(__test__.isActionAvailable(ACTIONS.TOKEN_IMAGE), false);
+    await assert.rejects(() => __test__.updateTokenImages({ path: "x.png" }), /SIPD\.Error\.NoToken/);
+  } finally {
+    delete env.canvas.tokens;
+  }
+});
+
+test("portraits change the actors of the selected tokens, else the user's character", async () => {
+  const { ACTIONS } = __test__;
+  createTokenScene();
+  const hero = createActor("hero");
+  env.canvas.tokens = { controlled: [{ document: { id: "t1", isOwner: true }, actor: hero }, { document: { id: "t2", isOwner: true }, actor: hero }] };
+  const originalUser = Object.getOwnPropertyDescriptor(env.game, "user");
+
+  try {
+    await __test__.executeAction({ action: ACTIONS.ACTOR_PORTRAIT, path: "portrait.png", name: "Portrait" });
+    assert.deepEqual(hero.updates, [{ img: "portrait.png" }]);
+
+    env.canvas.tokens.controlled = [];
+    const character = createActor("pc");
+    env.game.user.character = character;
+    assert.deepEqual(__test__.getEligibleActors(), [character]);
+    await __test__.updateActorPortraits({ path: "pc.png" });
+    assert.deepEqual(character.updates, [{ img: "pc.png" }]);
+
+    delete env.game.user.character;
+    await assert.rejects(() => __test__.updateActorPortraits({ path: "x.png" }), /SIPD\.Error\.NoActor/);
+  } finally {
+    delete env.canvas.tokens;
+    if ( originalUser ) Object.defineProperty(env.game, "user", originalUser);
+    delete env.game.user.character;
+  }
+});
+
+test("chat posts follow the current roll mode in v13 and the message mode in v14", async () => {
+  const { ACTIONS } = __test__;
+  env.state.coreSettings.rollMode = "blindroll";
+  await __test__.executeAction({ action: ACTIONS.CHAT_IMAGE, path: "a.png", name: "A", chatMode: "current" });
+  assert.equal(env.state.chatCreates[0].rollMode, "gmroll");
+  assert.deepEqual(env.state.chatCreates[0].speaker, { alias: "Speaker" });
+  assert.match(env.state.chatCreates[0].content, /sipd-chat-images/);
+
+  await __test__.postImagesToChat([{ path: "b.png", name: "B" }], { chatMode: "public" });
+  assert.equal(env.state.chatCreates[1].rollMode, "publicroll");
+
+  env.game.release = { generation: 14 };
+  env.state.coreSettings.messageMode = "self";
+  try {
+    assert.equal(__test__.getCurrentMessageMode(), "self");
+    await __test__.postImagesToChat([{ path: "c.png", name: "C" }]);
+    assert.equal(env.state.chatCreates[2].messageMode, "self");
+    await __test__.postImagesToChat([{ path: "d.png", name: "D" }], { chatMode: "public" });
+    assert.equal(env.state.chatCreates[3].messageMode, "public");
+  } finally {
+    delete env.game.release;
+  }
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.CHAT_IMAGE, chatMode: "public" }).chatMode, "public");
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE, chatMode: "public" }).chatMode, "current");
+});
+
+test("map pins link a new journal entry at the drop point, snapped and on the viewed level", async () => {
+  const { ACTIONS } = __test__;
+  const scene = createBatchScene({ constructor: { metadata: { defaultLevelId: "ground" } } });
+  env.canvas.ready = true;
+  env.canvas.scene = scene;
+  env.canvas.level = { id: "upper" };
+  env.canvas.notes = { getSnappedPoint: ({ x, y }) => ({ x: Math.round(x / 100) * 100, y: Math.round(y / 100) * 100 }) };
+  const originalCreate = JournalEntry.create;
+  JournalEntry.create = async (data) => {
+    env.state.journalCreates.push(data);
+    return { id: "entry-1", name: data.name, pages: { contents: [{ id: "page-1" }] } };
+  };
+
+  try {
+    await __test__.executeAction({ action: ACTIONS.MAP_PIN, path: "pin.png", name: "Pin", dropPoint: { x: 430, y: 270, sceneId: "scene-1", snap: true } });
+    assert.deepEqual(scene.notes[0], { entryId: "entry-1", pageId: "page-1", x: 400, y: 300, levels: ["upper"] });
+    assert.equal(env.state.journalCreates[0].pages[0].src, "pin.png");
+    assert.deepEqual(env.state.notifications.info, ["SIPD.Notification.MapPinCreated"]);
+
+    await __test__.createMapPinFromImage({ name: "Pasted", path: "p.png" });
+    await __test__.createMapPinFromImage({ name: "Free", path: "f.png", dropPoint: { x: 2000, y: 33, sceneId: "scene-1", snap: false } });
+    assert.deepEqual(scene.notes.slice(1).map((note) => [note.x, note.y]), [[500, 400], [1000, 33]]);
+    assert.equal(__test__.canUserPerformAction(ACTIONS.MAP_PIN), true);
+  } finally {
+    JournalEntry.create = originalCreate;
+    delete env.canvas.level;
+    delete env.canvas.notes;
+  }
+  env.canvas.ready = false;
+  await assert.rejects(() => __test__.createMapPinFromImage({ name: "None", path: "x.png" }), /no scene/);
+});
+
+test("shared images go to everyone or to the chosen users only", async () => {
+  const { ACTIONS } = __test__;
+  env.state.users = [
+    { id: "gm-user", name: "Gamemaster", active: true },
+    { id: "p2", name: "Zora", active: true },
+    { id: "p1", name: "Anton", active: true },
+    { id: "p3", name: "Offline", active: false }
+  ];
+  assert.deepEqual(__test__.getShareRecipientChoices(), [{ id: "p1", name: "Anton" }, { id: "p2", name: "Zora" }]);
+  assert.match(__test__.recipientsMarkup(__test__.getShareRecipientChoices()), /value="p1"[\s\S]*Anton[\s\S]*value="p2"/);
+  assert.match(__test__.recipientsMarkup([]), /SIPD\.Dialog\.RecipientsNone/);
+
+  const form = { querySelectorAll: () => [{ value: "p2" }, { value: "ghost" }] };
+  assert.deepEqual(__test__.readCheckedRecipients(form), ["p2", "ghost"]);
+  assert.deepEqual(__test__.normalizeActionDecision({ action: ACTIONS.SHARE_IMAGE, recipients: ["p2", "ghost"] }).recipients, ["p2"]);
+  assert.deepEqual(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE, recipients: ["p2"], shareToPlayers: false }).recipients, []);
+  assert.deepEqual(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE, recipients: ["p2"], shareToPlayers: true }).recipients, ["p2"]);
+
+  await __test__.executeAction({ action: ACTIONS.SHARE_IMAGE, path: "s.png", name: "S", recipients: ["p2"] });
+  await __test__.executeAction({ action: ACTIONS.JOURNAL_IMAGE, path: "j.png", name: "J", shareToPlayers: true, recipients: [] });
+  assert.deepEqual(env.state.showImageCalls.map((call) => call.options), [
+    { title: "S", showTitle: true, users: ["p2"] },
+    { title: "J", showTitle: true }
+  ]);
+});
+
+test("the import dialog shows recipients, prototype and chat options only where they apply", () => {
+  const { ACTIONS } = __test__;
+  const dialog = createDialogForm();
+  const extraRows = { recipients: new TestHTMLElement(), prototypeToken: new TestHTMLElement(), chatMode: new TestHTMLElement() };
+  for ( const [key, row] of Object.entries(extraRows) ) dialog.form.setQuerySelector(`[data-option-row="${key}"]`, row);
+  const note = new TestHTMLElement();
+  dialog.form.setQuerySelector("[data-optimize-note]", note);
+  dialog.form.elements.prototypeToken = { checked: true, disabled: false };
+  dialog.form.elements.chatMode = { value: "current", disabled: false };
+  const shareListeners = [];
+  dialog.shareField.addEventListener = (_type, handler) => shareListeners.push(handler);
+
+  __test__.configureDialogForm(dialog.app, __test__.UI_THEMES.SIGNATURE, null);
+  const visible = () => [extraRows.recipients.hidden, extraRows.prototypeToken.hidden, extraRows.chatMode.hidden].map((hidden) => !hidden);
+  assert.deepEqual(visible(), [false, false, false]);
+
+  dialog.shareField.checked = true;
+  shareListeners[0]();
+  assert.deepEqual(visible(), [true, false, false]);
+
+  dialog.actionField.value = ACTIONS.TOKEN_IMAGE;
+  dialog.actionField.fire();
+  assert.deepEqual(visible(), [false, true, false]);
+  assert.equal(dialog.form.elements.prototypeToken.disabled, false);
+
+  dialog.actionField.value = ACTIONS.CHAT_IMAGE;
+  dialog.actionField.fire();
+  assert.deepEqual(visible(), [false, false, true]);
+  assert.equal(note.hidden, false);
+
+  dialog.actionField.value = ACTIONS.SHARE_IMAGE;
+  dialog.actionField.fire();
+  assert.deepEqual(visible(), [true, false, false]);
+
+  dialog.actionField.value = ACTIONS.PREVIEW_ONLY;
+  dialog.actionField.fire();
+  assert.equal(note.hidden, true);
+});
+
+test("uploads are shrunk and converted to WebP when the settings ask for it, GIFs stay untouched", async () => {
+  const { ACTIONS } = __test__;
+  setSetting(__test__.CONVERT_WEBP_SETTING, true);
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 256);
+  setSetting(__test__.WEBP_QUALITY_SETTING, 80);
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  const encoded = [];
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    constructor(width, height) {
+      encoded.push({ width, height });
+    }
+    getContext() {
+      return { drawImage() {} };
+    }
+    async convertToBlob(options) {
+      encoded.push(options);
+      return new Blob(["w"], { type: "image/webp" });
+    }
+  };
+  env.canvas.ready = true;
+  env.canvas.scene = createBatchScene();
+  env.state.uploadResponse = { path: "uploaded.webp" };
+  env.state.dialogWaitResult = { name: "Shrunk", action: ACTIONS.TILE_CENTERED, uploadDirectory: "custom" };
+
+  try {
+    assert.deepEqual(__test__.getImageOptimizationOptions(), { maxSize: 256, webp: true, quality: 80 });
+    await __test__.handleImportedImage(createImageFile("Big.png", "image/png", "a png image"));
+    assert.match(env.state.lastDialogOptions.content, /data-optimize-note/);
+    assert.deepEqual(encoded, [{ width: 256, height: 160 }, { type: "image/webp", quality: 0.8 }]);
+    const uploaded = env.state.uploadCalls[0].file;
+    assert.equal(uploaded.type, "image/webp");
+    assert.match(uploaded.name, /^[a-f0-9]{64}\.webp$/);
+    assert.equal(uploaded.name, `${await __test__.hashFileContent(new Blob(["w"]))}.webp`);
+    assert.deepEqual([env.canvas.scene.tileDocs[0].width, env.canvas.scene.tileDocs[0].height], [256, 160]);
+
+    encoded.length = 0;
+    await __test__.handleImportedImage(createImageFile("Anim.gif", "image/gif", "gif data"));
+    assert.equal(encoded.length, 0);
+    assert.match(env.state.uploadCalls[1].file.name, /\.gif$/);
+    assert.doesNotMatch(env.state.lastDialogOptions.content, /data-optimize-note/);
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});
+
+test("images posted to chat open in a popout on click", () => {
+  const image = new TestHTMLElement();
+  image.getAttribute = (name) => (name === "src" ? "chat.png" : "Chat Image");
+  const html = new TestHTMLElement();
+  html.setQuerySelectorAll(".sipd-chat-images img", [image]);
+  __test__.onRenderChatMessage({}, html);
+  image.dispatch("click");
+  assert.equal(env.state.imagePopouts[0].config.src, "chat.png");
+  assert.equal(env.state.imagePopouts[0].config.window.title, "Chat Image");
+  __test__.onRenderChatMessage({}, null);
+  assert.equal(__test__.getMaxImageSizeChoices()[0], "SIPD.Settings.MaxImageSize.Off");
+  assert.equal(__test__.getMaxImageSizeChoices()[4096], "4096 px");
+});
+
+test("the optimize note only promises a format change that makes the file smaller", () => {
+  const scaled = { width: 2048, height: 1024, scaled: true, type: "image/webp" };
+  const converted = { width: 300, height: 200, scaled: false, type: "image/webp" };
+  assert.match(__test__.optimizeNoteText(scaled), /^SIPD\.Dialog\.OptimizeNote\b(?!IfSmaller)/);
+  assert.match(__test__.optimizeNoteText(converted), /^SIPD\.Dialog\.OptimizeNoteIfSmaller/);
+  assert.match(__test__.optimizeNoteMarkup(converted), /data-optimize-note/);
+  assert.equal(__test__.optimizeNoteMarkup(null), "");
+});
+
+test("the upload directory hint names the storage root as escaped text", () => {
+  env.state.localizations.set("SIPD.Dialog.UploadDirectoryHint", "Choose a folder below {root}.");
+  assert.equal(__test__.uploadDirectoryHintMarkup(), "Choose a folder below worlds/world-id/sephrals-image-paste-drop.");
+  env.state.localizations.set("SIPD.Dialog.UploadDirectoryHint", "Below <world-id>/{root}");
+  assert.doesNotMatch(__test__.uploadDirectoryHintMarkup(), /<world-id>/);
+  env.state.localizations.delete("SIPD.Dialog.UploadDirectoryHint");
 });

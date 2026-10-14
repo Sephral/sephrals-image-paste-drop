@@ -11,11 +11,12 @@
 ## Highlights
 
 * **Paste or drop:** paste a screenshot or a copied image address with Ctrl+V, or drag an image file or a picture from your browser onto Foundry.
-* **You decide what it becomes:** a new scene with the image as its background, the background or foreground of the current scene, a tile, a journal page or a picture shown to all players.
+* **You decide what it becomes:** a new scene with the image as its background, the background or foreground of the current scene, a tile, a journal page, a map pin, a token image, an actor portrait, a chat post or a picture shown to all players or just the ones you pick.
+* **Several images at once:** drop a handful of files and turn them into one handout with a page each, a neat grid of tiles or a new scene per map.
 * **Tiles where you want them:** drop an image onto the map and the tile lands right there, snapped to the grid.
-* **No file juggling:** the image is uploaded and filed away for you. No detour through the file picker, and the same image is never stored twice.
+* **No file juggling:** the image is uploaded and filed away for you. No detour through the file picker, and the same image is never stored twice. Huge images can be shrunk and saved as WebP on the way.
 * **Image links too:** copy an image address in your browser and paste it. If the site blocks the download, you can still link the image directly.
-* **Players can join in:** let players show images or create handouts, with exactly the permissions you choose.
+* **Players can join in:** let players show images, create handouts or give their own token a new look, with exactly the permissions you choose.
 * **Remembers your routine:** set a default target or reuse the last one, so the next image takes a single click.
 
 ## How it works

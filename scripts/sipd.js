@@ -1,3 +1,25 @@
+import {
+  formatLabelForType,
+  getImageOptimizationPlan,
+  hasOptimizationOptions,
+  optimizeImageFile
+} from "./image-optimize.js";
+import {
+  batchItemName,
+  buildChatImageContent,
+  clampPointToRect,
+  clampSpan,
+  imagePostMode,
+  layoutTileGrid,
+  normalizeRecipientIds,
+  parseImageUrlList,
+  parseUriList,
+  pickDroppedUri,
+  toLegacyRollMode,
+  toMessageMode,
+  withVersionQuery
+} from "./target-helpers.js";
+
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
 const ENABLE_PASTE_SETTING = "enablePasteImport";
@@ -16,6 +38,11 @@ const STORAGE_FOLDER_SETTING = "storageFolder";
 const UI_LANGUAGE_SETTING = "uiLanguage";
 const UI_THEME_SETTING = "uiTheme";
 const WINDOW_STATE_SETTING = "windowState";
+const LAST_BATCH_ACTION_SETTING = "lastBatchAction";
+const MAX_IMAGE_SIZE_SETTING = "maxImageSize";
+const CONVERT_WEBP_SETTING = "convertToWebp";
+const WEBP_QUALITY_SETTING = "webpQuality";
+const MAX_IMAGE_SIZE_CHOICES = Object.freeze([0, 2048, 4096, 8192]);
 const WORLD_STORAGE_ROOT = MODULE_ID;
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
 const DEFAULT_UI_LANGUAGE = "en";
@@ -26,7 +53,8 @@ const UI_THEMES = {
 const WINDOW_KEYS = {
   IMPORT: "import",
   SETTINGS: "settings",
-  PREVIEW: "preview"
+  PREVIEW: "preview",
+  BATCH: "batch"
 };
 const ACTIONS = {
   SCENE_BACKGROUND: "scene-background",
@@ -35,23 +63,53 @@ const ACTIONS = {
   TILE_CENTERED: "tile-centered",
   TILE_FIT: "tile-fit",
   JOURNAL_IMAGE: "journal-image",
+  MAP_PIN: "map-pin",
+  TOKEN_IMAGE: "token-image",
+  ACTOR_PORTRAIT: "actor-portrait",
+  CHAT_IMAGE: "chat-image",
   UPLOAD_DIRECTORY: "upload-directory",
   SHARE_IMAGE: "share-image",
   PREVIEW_ONLY: "preview-only"
 };
-// Targets the GM can open up for players on top of the preview. Scene and tile targets stay GM-only,
-// because Foundry requires the Assistant role to create scenes and tiles.
+// Targets for several images at once that have no single-image counterpart
+const BATCH_ACTIONS = {
+  JOURNAL_PAGES: "batch-journal-pages",
+  TILE_GRID: "batch-tile-grid"
+};
+const CHAT_MODES = {
+  CURRENT: "current",
+  PUBLIC: "public"
+};
+// Targets the GM can open up for players on top of the preview. Scene, tile and map pin targets stay GM-only,
+// because Foundry requires the Assistant role to create scenes, tiles and notes.
+// Token and portrait targets only touch tokens and actors the player owns.
 const PLAYER_SELECTABLE_ACTIONS = Object.freeze([
   ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.TOKEN_IMAGE,
+  ACTIONS.ACTOR_PORTRAIT,
+  ACTIONS.CHAT_IMAGE,
   ACTIONS.UPLOAD_DIRECTORY,
   ACTIONS.SHARE_IMAGE
 ]);
-// Targets that can show a linked image the browser could not download. Foundry draws scene backgrounds and
-// tiles with WebGL, which needs the same cross-origin access the download lacked, and uploads need a copy.
+// Targets that can show a linked image the browser could not download. Foundry draws scene backgrounds,
+// tiles and tokens with WebGL, which needs the same cross-origin access the download lacked, and uploads need a copy.
+// Portraits, chat posts and map pins show the image in HTML (a map pin draws only its icon on the canvas).
 const REMOTE_URL_ACTIONS = Object.freeze([
   ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.MAP_PIN,
+  ACTIONS.ACTOR_PORTRAIT,
+  ACTIONS.CHAT_IMAGE,
   ACTIONS.SHARE_IMAGE,
   ACTIONS.PREVIEW_ONLY
+]);
+// Targets that need a viewed scene
+const SCENE_ACTIONS = Object.freeze([
+  ACTIONS.SCENE_BACKGROUND_CURRENT,
+  ACTIONS.SCENE_FOREGROUND_CURRENT,
+  ACTIONS.TILE_CENTERED,
+  ACTIONS.TILE_FIT,
+  ACTIONS.MAP_PIN,
+  BATCH_ACTIONS.TILE_GRID
 ]);
 const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
 // Players cannot create directories, so their uploads go into folders a GM client prepares.
@@ -68,6 +126,10 @@ function getAllActionChoices() {
     {value: ACTIONS.TILE_CENTERED, label: localize("SIPD.Action.TileCentered")},
     {value: ACTIONS.TILE_FIT, label: localize("SIPD.Action.TileFit")},
     {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Action.JournalImage")},
+    {value: ACTIONS.MAP_PIN, label: localize("SIPD.Action.MapPin")},
+    {value: ACTIONS.TOKEN_IMAGE, label: localize("SIPD.Action.TokenImage")},
+    {value: ACTIONS.ACTOR_PORTRAIT, label: localize("SIPD.Action.ActorPortrait")},
+    {value: ACTIONS.CHAT_IMAGE, label: localize("SIPD.Action.ChatImage")},
     {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Action.UploadDirectory")},
     {value: ACTIONS.SHARE_IMAGE, label: localize("SIPD.Action.ShareImage")},
     {value: ACTIONS.PREVIEW_ONLY, label: localize("SIPD.Action.PreviewOnly")}
@@ -322,7 +384,60 @@ Hooks.once("init", () => {
     type: Object,
     default: {}
   });
+
+  game.settings.register(MODULE_ID, LAST_BATCH_ACTION_SETTING, {
+    scope: "client",
+    config: false,
+    type: String,
+    default: BATCH_ACTIONS.JOURNAL_PAGES
+  });
+
+  game.settings.register(MODULE_ID, MAX_IMAGE_SIZE_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.MaxImageSize.Label"),
+    hint: localize("SIPD.Settings.MaxImageSize.Hint"),
+    type: Number,
+    choices: getMaxImageSizeChoices(),
+    default: 0
+  });
+
+  game.settings.register(MODULE_ID, CONVERT_WEBP_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.ConvertWebp.Label"),
+    hint: localize("SIPD.Settings.ConvertWebp.Hint"),
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(MODULE_ID, WEBP_QUALITY_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.WebpQuality.Label"),
+    hint: localize("SIPD.Settings.WebpQuality.Hint"),
+    type: Number,
+    range: {min: 50, max: 100, step: 5},
+    default: 85
+  });
+
+  Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 });
+
+function getMaxImageSizeChoices() {
+  return Object.fromEntries(MAX_IMAGE_SIZE_CHOICES.map(size => [
+    size,
+    size ? `${size} px` : localize("SIPD.Settings.MaxImageSize.Off")
+  ]));
+}
+
+// Images posted to chat open in a popout on click, like images in journal pages.
+function onRenderChatMessage(_message, html) {
+  const element = html instanceof HTMLElement ? html : html?.[0];
+  for ( const image of element?.querySelectorAll?.(".sipd-chat-images img") ?? [] ) {
+    image.addEventListener("click", () => openImagePreview(image.getAttribute("src"), image.getAttribute("alt") || ""));
+  }
+}
 
 Hooks.once("ready", () => {
   void ensureModuleTranslationsLoaded();
@@ -337,15 +452,21 @@ async function onPaste(event) {
   if ( isEditableTarget(event.target) ) return;
   if ( !canCurrentUserUseTool() ) return;
 
-  const clipboardImage = extractClipboardImage(event);
-  const imageUrl = clipboardImage ? null : extractClipboardImageUrl(event);
-  if ( !clipboardImage && !imageUrl ) return;
+  // Several images (or several image links, one per line) become a batch
+  const clipboardImages = extractClipboardImages(event);
+  const imageUrls = clipboardImages.length ? [] : extractClipboardImageUrls(event);
+  const batch = clipboardImages.length > 1 ? clipboardImages : imageUrls;
+  const clipboardImage = clipboardImages[0] ?? null;
+  // The same link on several lines collapses to one link, which is a normal single image
+  const imageUrl = (clipboardImage || (batch.length > 1)) ? null : (batch[0] ?? extractClipboardImageUrl(event));
+  if ( !clipboardImage && !imageUrl && (batch.length < 2) ) return;
 
   event.preventDefault();
   event.stopPropagation();
 
   try {
-    await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl));
+    if ( batch.length > 1 ) await importImageBatch(batch);
+    else await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl));
   } catch (error) {
     console.error(`${MODULE_ID} | Paste handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -368,13 +489,21 @@ async function onDrop(event) {
   if ( !canCurrentUserUseTool() ) return;
   if ( !hasTransferableImage(event.dataTransfer) ) return;
 
+  // Dropped files can only be read during the event, so the batch is collected before anything awaits
+  const droppedFiles = extractDroppedImageFiles(event.dataTransfer);
+  // Dropped text without a link (a text selection, Foundry's own drag data) is left to Foundry
+  if ( !droppedFiles.length && !getDroppedUri(event.dataTransfer) ) return;
+
   event.preventDefault();
   event.stopPropagation();
 
   // Tiles from a drop onto the canvas go where the image was dropped
   const dropPoint = getCanvasDropPoint(event);
+  const droppedUrls = droppedFiles.length ? [] : extractDroppedImageUrls(event.dataTransfer);
+  const batch = droppedFiles.length > 1 ? droppedFiles : droppedUrls;
   try {
-    await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint});
+    if ( batch.length > 1 ) await importImageBatch(batch, {dropPoint});
+    else await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint});
   } catch (error) {
     console.error(`${MODULE_ID} | Drop handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -396,19 +525,34 @@ function isEditableTarget(target) {
 }
 
 function extractClipboardImage(event) {
-  const items = Array.from(event.clipboardData?.items ?? []);
-  for ( const item of items ) {
+  return extractClipboardImages(event)[0] ?? null;
+}
+
+function extractClipboardImages(event) {
+  return collectImageFiles(event.clipboardData);
+}
+
+// Image files of a clipboard or drop, from its items or else from its file list.
+function collectImageFiles(transfer) {
+  const files = [];
+  for ( const item of Array.from(transfer?.items ?? []) ) {
     if ( item.kind !== "file" ) continue;
-    if ( !item.type.startsWith("image/") ) continue;
+    if ( !item.type?.startsWith("image/") ) continue;
     const file = item.getAsFile();
-    if ( file ) return file;
+    if ( file ) files.push(file);
   }
-  return null;
+  if ( files.length ) return files;
+  return Array.from(transfer?.files ?? []).filter(file => file.type?.startsWith("image/"));
 }
 
 // Copied image links arrive as plain text. Only a single image URL counts, any other text is left alone.
 function extractClipboardImageUrl(event) {
   return parseImageUrl(event.clipboardData?.getData?.("text/plain"));
+}
+
+// Several image links, one per line
+function extractClipboardImageUrls(event) {
+  return parseImageUrlList(event.clipboardData?.getData?.("text/plain"), parseImageUrl);
 }
 
 function parseImageUrl(text) {
@@ -452,10 +596,30 @@ async function extractDroppedImage(dataTransfer) {
   const imageFile = files.find(file => file.type?.startsWith("image/"));
   if ( imageFile ) return imageFile;
 
-  const uri = dataTransfer?.getData("text/uri-list") || dataTransfer?.getData("text/plain");
+  const uri = getDroppedUri(dataTransfer);
   if ( !uri ) return null;
 
   return fetchDroppedImage(uri);
+}
+
+function getDroppedUri(dataTransfer) {
+  const read = (type) => {
+    try {
+      return dataTransfer?.getData?.(type) ?? "";
+    } catch (_error) {
+      return "";
+    }
+  };
+  return pickDroppedUri({uriList: read("text/uri-list"), text: read("text/plain"), html: read("text/html")});
+}
+
+function extractDroppedImageFiles(dataTransfer) {
+  return collectImageFiles(dataTransfer);
+}
+
+// A drop of several links lists them in text/uri-list, one per line
+function extractDroppedImageUrls(dataTransfer) {
+  return parseUriList(dataTransfer?.getData?.("text/uri-list"));
 }
 
 async function fetchDroppedImage(rawUri) {
@@ -530,9 +694,13 @@ function canUserPerformAction(action) {
   if ( !getPlayerActionWhitelist().has(action) ) return false;
 
   // The GM opt-in above is the only gate for sharing: Foundry relays shared images without a permission check.
+  // Token and portrait targets also check ownership of each token or actor when they run.
   switch ( action ) {
     case ACTIONS.UPLOAD_DIRECTORY:
     case ACTIONS.SHARE_IMAGE:
+    case ACTIONS.CHAT_IMAGE:
+    case ACTIONS.TOKEN_IMAGE:
+    case ACTIONS.ACTOR_PORTRAIT:
       return user.hasPermission("FILES_UPLOAD");
     case ACTIONS.JOURNAL_IMAGE:
       return user.hasPermission("FILES_UPLOAD") && user.hasPermission("JOURNAL_CREATE");
@@ -558,7 +726,7 @@ async function importImage(loadImage, options={}) {
     file = await loadImage();
   } catch (error) {
     if ( !error?.remoteUrl ) throw error;
-    return handleRemoteImageUrl(error.remoteUrl);
+    return handleRemoteImageUrl(error.remoteUrl, options);
   }
   if ( file ) await handleImportedImage(file, options);
 }
@@ -570,29 +738,29 @@ async function handleImportedImage(file, {dropPoint=null}={}) {
 
   try {
     const dimensions = await readImageDimensions(objectUrl);
-    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions});
+    const optimizePlan = await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
+    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions, optimizePlan});
     if ( !decision ) return;
 
     if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
       await rememberUploadDirectory(decision.uploadDirectory);
     }
 
-    const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, preparedFile);
-    const path = requiresPersistentPath(decision.action, decision.shareToPlayers)
-      ? await uploadClipboardFile(preparedFile, {directory: decision.uploadDirectory, targetPath: reusableUploadTarget})
+    // Shrinking and WebP only apply to uploads. The file name hashes the final bytes.
+    const needsUpload = requiresPersistentPath(decision.action, decision.shareToPlayers);
+    const upload = needsUpload ? await prepareUploadFile(preparedFile, dimensions) : {file: preparedFile, ...dimensions};
+    const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, upload.file);
+    const path = needsUpload
+      ? await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory, targetPath: reusableUploadTarget})
       : objectUrl;
 
     if ( path === objectUrl ) releaseObjectUrl = false;
 
     await executeAction({
-      action: decision.action,
-      name: decision.name,
-      shareToPlayers: decision.shareToPlayers,
-      activateScene: decision.activateScene,
-      navigation: decision.navigation,
+      ...getDecisionOptions(decision),
       path,
-      width: dimensions.width,
-      height: dimensions.height,
+      width: upload.width,
+      height: upload.height,
       temporaryObjectUrl: path === objectUrl ? objectUrl : null,
       dropPoint
     });
@@ -601,8 +769,118 @@ async function handleImportedImage(file, {dropPoint=null}={}) {
   }
 }
 
+function getDecisionOptions(decision) {
+  return {
+    action: decision.action,
+    name: decision.name,
+    shareToPlayers: decision.shareToPlayers,
+    activateScene: decision.activateScene,
+    navigation: decision.navigation,
+    recipients: decision.recipients ?? [],
+    prototypeToken: Boolean(decision.prototypeToken),
+    chatMode: decision.chatMode ?? CHAT_MODES.CURRENT
+  };
+}
+
+function getImageOptimizationOptions() {
+  return {
+    maxSize: Number(getRegisteredSettingValue(MAX_IMAGE_SIZE_SETTING, 0)) || 0,
+    webp: Boolean(getRegisteredSettingValue(CONVERT_WEBP_SETTING, false)),
+    quality: Number(getRegisteredSettingValue(WEBP_QUALITY_SETTING, 85))
+  };
+}
+
+// The file that gets uploaded, shrunk or converted when the settings ask for it.
+async function prepareUploadFile(file, dimensions) {
+  const options = getImageOptimizationOptions();
+  if ( !hasOptimizationOptions(options) ) return {file, ...dimensions};
+  const result = await optimizeImageFile(file, dimensions, options);
+  return {file: result.file, width: result.width, height: result.height};
+}
+
+// Several images from one paste or drop. Links that cannot be downloaded are skipped.
+async function importImageBatch(sources, options={}) {
+  const files = [];
+  let skipped = 0;
+  for ( const source of sources ) {
+    if ( typeof source !== "string" ) {
+      files.push(source);
+      continue;
+    }
+    try {
+      const file = await fetchDroppedImage(source);
+      if ( file ) files.push(file);
+      else skipped += 1;
+    } catch (_error) {
+      skipped += 1;
+    }
+  }
+
+  if ( skipped ) ui.notifications.warn(localize("SIPD.Notification.BatchSkipped", {count: skipped}));
+  if ( !files.length ) throw new Error(localize("SIPD.Error.DropFetchFailed"));
+  if ( files.length === 1 ) return handleImportedImage(files[0], options);
+  return handleImportedBatch(files, options);
+}
+
+async function handleImportedBatch(files, {dropPoint=null}={}) {
+  const items = [];
+  let skipped = 0;
+
+  try {
+    for ( const [index, file] of files.entries() ) {
+      const preparedFile = prepareClipboardFile(file);
+      const objectUrl = URL.createObjectURL(preparedFile);
+      try {
+        const dimensions = await readImageDimensions(objectUrl);
+        const plan = await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
+        items.push({file: preparedFile, objectUrl, sourceName: file.name, index, plan, ...dimensions});
+      } catch (_error) {
+        URL.revokeObjectURL(objectUrl);
+        skipped += 1;
+      }
+    }
+    if ( skipped ) ui.notifications.warn(localize("SIPD.Notification.BatchSkipped", {count: skipped}));
+    if ( !items.length ) throw new Error(localize("SIPD.Error.DimensionRead"));
+    // Only one readable image left: it gets the normal dialog with every single-image target
+    if ( items.length === 1 ) return handleImportedImage(items[0].file, {dropPoint});
+
+    const choices = getBatchActionChoices();
+    if ( !choices.some(choice => !choice.disabled) ) {
+      ui.notifications.warn(localize("SIPD.Notification.BatchUnavailable"));
+      return;
+    }
+
+    const decision = normalizeBatchDecision(await promptForBatchAction({items, defaultName: defaultDocumentName()}));
+    if ( !decision ) return;
+
+    if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) ) {
+      await game.settings.set(MODULE_ID, LAST_BATCH_ACTION_SETTING, decision.action);
+    }
+    if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
+      await rememberUploadDirectory(decision.uploadDirectory);
+    }
+
+    ui.notifications.info(localize("SIPD.Notification.BatchUploading", {count: items.length}));
+    const results = [];
+    for ( const [position, item] of items.entries() ) {
+      const upload = await prepareUploadFile(item.file, {width: item.width, height: item.height});
+      const path = await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory});
+      results.push({
+        path,
+        width: upload.width,
+        height: upload.height,
+        name: batchItemName(decision.name, item.sourceName, position)
+      });
+    }
+
+    await executeBatchAction({...decision, items: results, dropPoint});
+  } finally {
+    for ( const item of items ) URL.revokeObjectURL(item.objectUrl);
+  }
+}
+
 // Uses an image URL the browser could not download as it is, without uploading a copy.
-async function handleRemoteImageUrl(url) {
+async function handleRemoteImageUrl(url, {dropPoint=null}={}) {
   let dimensions;
   try {
     dimensions = await readImageDimensions(url);
@@ -615,15 +893,12 @@ async function handleRemoteImageUrl(url) {
   if ( !decision ) return;
 
   await executeAction({
-    action: decision.action,
-    name: decision.name,
-    shareToPlayers: decision.shareToPlayers,
-    activateScene: decision.activateScene,
-    navigation: decision.navigation,
+    ...getDecisionOptions(decision),
     path: url,
     width: dimensions.width,
     height: dimensions.height,
-    temporaryObjectUrl: null
+    temporaryObjectUrl: null,
+    dropPoint
   });
 }
 
@@ -676,13 +951,14 @@ function getUrlHostLabel(url) {
   return String(url ?? "").slice(0, 60);
 }
 
-async function promptForImportDecision({previewUrl, width, height, remoteUrl=false}) {
+async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
     width,
     height,
-    remoteUrl
+    remoteUrl,
+    optimizePlan
   }), {remoteUrl});
   if ( !decision ) return null;
 
@@ -702,15 +978,33 @@ function normalizeActionDecision(decision, {remoteUrl=false}={}) {
   const allowedActions = new Set(getPermittedActions().filter(action => !remoteUrl || REMOTE_URL_ACTIONS.includes(action)));
   const action = allowedActions.has(decision.action) ? decision.action : ACTIONS.PREVIEW_ONLY;
   const behavior = getActionBehavior(action);
+  const shareToPlayers = behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers);
+  const sharing = shareToPlayers || behavior.supportsRecipients;
 
   return {
     name: String(decision.name ?? "").trim() || defaultDocumentName(),
     action,
     uploadDirectory: game.user?.isGM ? normalizeUploadDirectory(decision.uploadDirectory) : PLAYER_UPLOAD_DIRECTORY,
-    shareToPlayers: behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers),
+    shareToPlayers,
     activateScene: behavior.supportsActivateScene && Boolean(decision.activateScene),
-    navigation: behavior.supportsNavigation && Boolean(decision.navigation)
+    navigation: behavior.supportsNavigation && Boolean(decision.navigation),
+    recipients: sharing ? normalizeRecipientIds(decision.recipients, getAllUserIds()) : [],
+    prototypeToken: behavior.supportsPrototypeToken && Boolean(decision.prototypeToken),
+    chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT
   };
+}
+
+function getAllUserIds() {
+  return Array.from(game.users ?? [], user => user.id);
+}
+
+// Users a shared image can go to: everyone else who is connected right now.
+function getShareRecipientChoices() {
+  const currentUserId = game.user?.id;
+  return Array.from(game.users ?? [])
+    .filter(user => user.active && (user.id !== currentUserId))
+    .map(user => ({id: user.id, name: user.name}))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name)));
 }
 
 function defaultUploadDirectory() {
@@ -886,7 +1180,7 @@ async function readImageDimensions(src) {
   });
 }
 
-async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false}) {
+async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null}) {
   const defaults = getDialogDefaults({remoteUrl});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: 860, height: 720});
   const content = `
@@ -917,6 +1211,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           <div class="sipd-dialog__preview">
             <img alt="${escapeHtml(defaultName)}" data-preview-image>
           </div>
+          ${optimizeNoteMarkup(optimizePlan)}
         </section>
 
         <section class="sipd-panel sipd-panel--form">
@@ -949,10 +1244,27 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 <datalist id="sipd-upload-directories">
                   ${uploadDirectoryOptionsMarkup(defaults.uploadDirectoryChoices)}
                 </datalist>
-                <small class="sipd-field-hint">${localize("SIPD.Dialog.UploadDirectoryHint")}</small>
+                <small class="sipd-field-hint">${uploadDirectoryHintMarkup()}</small>
               </div>
             </div>
+            <div class="form-group" data-option-row="chatMode">
+              <label>${localize("SIPD.Dialog.ChatMode")}</label>
+              <div class="form-fields">
+                <select name="chatMode">
+                  <option value="${CHAT_MODES.CURRENT}">${localize("SIPD.Dialog.ChatModeCurrent")}</option>
+                  <option value="${CHAT_MODES.PUBLIC}">${localize("SIPD.Dialog.ChatModePublic")}</option>
+                </select>
+              </div>
+            </div>
+            ${recipientsMarkup(getShareRecipientChoices())}
             <div class="form-group stacked sipd-choice-stack">
+              <label class="checkbox sipd-choice-row" data-option-row="prototypeToken">
+                <input type="checkbox" name="prototypeToken" checked>
+                <span>
+                  <strong>${localize("SIPD.Dialog.PrototypeToken")}</strong>
+                  <small>${localize("SIPD.Dialog.PrototypeTokenHint")}</small>
+                </span>
+              </label>
               <label class="checkbox sipd-choice-row" data-option-row="shareToPlayers">
                 <input type="checkbox" name="shareToPlayers"${defaults.shareToPlayers ? " checked" : ""}>
                 <span>
@@ -1002,7 +1314,10 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           uploadDirectory: normalizeUploadDirectory(button.form.elements.uploadDirectory?.value),
           shareToPlayers: button.form.elements.shareToPlayers.checked,
           activateScene: button.form.elements.activateScene.checked,
-          navigation: button.form.elements.navigation.checked
+          navigation: button.form.elements.navigation.checked,
+          recipients: readCheckedRecipients(button.form),
+          prototypeToken: Boolean(button.form.elements.prototypeToken?.checked),
+          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT
         })
       },
       {
@@ -1011,6 +1326,45 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
       }
     ]
   });
+}
+
+// Hint below the preview when uploads get shrunk or converted
+function optimizeNoteMarkup(plan) {
+  if ( !plan ) return "";
+  return `<p class="sipd-optimize-note" data-optimize-note>${escapeHtml(optimizeNoteText(plan))}</p>`;
+}
+
+// A pure format change is only kept when it makes the file smaller, so the note does not promise it.
+function optimizeNoteText(plan) {
+  const data = {width: plan.width, height: plan.height, format: formatLabelForType(plan.type)};
+  return localize(plan.scaled ? "SIPD.Dialog.OptimizeNote" : "SIPD.Dialog.OptimizeNoteIfSmaller", data);
+}
+
+// No recipient checked means everyone
+function recipientsMarkup(users=[]) {
+  const options = users.map(user => `
+    <label class="checkbox sipd-recipient">
+      <input type="checkbox" name="recipients" value="${escapeHtml(user.id)}">
+      <span>${escapeHtml(user.name)}</span>
+    </label>`).join("");
+  const hint = localize(users.length ? "SIPD.Dialog.RecipientsHint" : "SIPD.Dialog.RecipientsNone");
+  return `
+    <div class="form-group" data-option-row="recipients">
+      <label>${localize("SIPD.Dialog.Recipients")}</label>
+      <div class="form-fields sipd-field-stack">
+        ${options ? `<div class="sipd-recipient-list">${options}</div>` : ""}
+        <small class="sipd-field-hint">${hint}</small>
+      </div>
+    </div>`;
+}
+
+// The hint names the real storage root. Its text is escaped, a placeholder such as <world-id> would become a tag.
+function uploadDirectoryHintMarkup() {
+  return escapeHtml(localize("SIPD.Dialog.UploadDirectoryHint", {root: getWorldStorageRoot()}));
+}
+
+function readCheckedRecipients(form) {
+  return Array.from(form?.querySelectorAll?.('input[name="recipients"]:checked') ?? [], input => input.value);
 }
 
 function uploadDirectoryOptionsMarkup(choices=[]) {
@@ -1026,55 +1380,74 @@ function actionOptionsMarkup(selectedAction=null, {remoteUrl=false}={}) {
 }
 
 function getActionChoices({remoteUrl=false}={}) {
-  const hasScene = hasCanvasScene();
   const allowedActions = new Set(getPermittedActions());
   return getAllActionChoices().map(choice => ({
     ...choice,
-    disabled: ([
-      ACTIONS.SCENE_BACKGROUND_CURRENT,
-      ACTIONS.SCENE_FOREGROUND_CURRENT,
-      ACTIONS.TILE_CENTERED,
-      ACTIONS.TILE_FIT
-    ].includes(choice.value) && !hasScene) || (remoteUrl && !REMOTE_URL_ACTIONS.includes(choice.value))
+    disabled: !isActionAvailable(choice.value) || (remoteUrl && !REMOTE_URL_ACTIONS.includes(choice.value))
   })).filter(choice => allowedActions.has(choice.value));
 }
+
+// Whether the current canvas state allows a target: a viewed scene, selected tokens or an actor to change.
+function isActionAvailable(action) {
+  if ( SCENE_ACTIONS.includes(action) ) return hasCanvasScene();
+  if ( action === ACTIONS.TOKEN_IMAGE ) return getEligibleTokens().length > 0;
+  if ( action === ACTIONS.ACTOR_PORTRAIT ) return getEligibleActors().length > 0;
+  return true;
+}
+
+const NO_ACTION_OPTIONS = Object.freeze({
+  supportsShareToPlayers: false,
+  supportsActivateScene: false,
+  supportsNavigation: false,
+  supportsUploadDirectory: false,
+  supportsRecipients: false,
+  supportsPrototypeToken: false,
+  supportsChatMode: false
+});
 
 function getActionBehavior(action) {
   switch ( action ) {
     case ACTIONS.SCENE_BACKGROUND:
       return {
+        ...NO_ACTION_OPTIONS,
         supportsShareToPlayers: true,
         supportsActivateScene: true,
-        supportsNavigation: true,
-        supportsUploadDirectory: false
+        supportsNavigation: true
       };
     case ACTIONS.SCENE_BACKGROUND_CURRENT:
     case ACTIONS.SCENE_FOREGROUND_CURRENT:
     case ACTIONS.TILE_CENTERED:
     case ACTIONS.TILE_FIT:
+    case ACTIONS.MAP_PIN:
     case ACTIONS.JOURNAL_IMAGE:
       return {
-        supportsShareToPlayers: true,
-        supportsActivateScene: false,
-        supportsNavigation: false,
-        supportsUploadDirectory: false
+        ...NO_ACTION_OPTIONS,
+        supportsShareToPlayers: true
       };
     case ACTIONS.UPLOAD_DIRECTORY:
       return {
-        supportsShareToPlayers: false,
-        supportsActivateScene: false,
-        supportsNavigation: false,
+        ...NO_ACTION_OPTIONS,
         supportsUploadDirectory: true
       };
+    case ACTIONS.TOKEN_IMAGE:
+      return {
+        ...NO_ACTION_OPTIONS,
+        supportsPrototypeToken: true
+      };
+    case ACTIONS.CHAT_IMAGE:
+      return {
+        ...NO_ACTION_OPTIONS,
+        supportsChatMode: true
+      };
     case ACTIONS.SHARE_IMAGE:
+      return {
+        ...NO_ACTION_OPTIONS,
+        supportsRecipients: true
+      };
+    case ACTIONS.ACTOR_PORTRAIT:
     case ACTIONS.PREVIEW_ONLY:
     default:
-      return {
-        supportsShareToPlayers: false,
-        supportsActivateScene: false,
-        supportsNavigation: false,
-        supportsUploadDirectory: false
-      };
+      return {...NO_ACTION_OPTIONS};
   }
 }
 
@@ -1111,11 +1484,17 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
   const activateSceneField = form.elements.activateScene;
   const navigationField = form.elements.navigation;
   const uploadDirectoryField = form.elements.uploadDirectory;
+  const prototypeTokenField = form.elements.prototypeToken;
+  const chatModeField = form.elements.chatMode;
+  const optimizeNote = form.querySelector("[data-optimize-note]");
   const optionRows = {
     shareToPlayers: form.querySelector('[data-option-row="shareToPlayers"]'),
     activateScene: form.querySelector('[data-option-row="activateScene"]'),
     navigation: form.querySelector('[data-option-row="navigation"]'),
-    uploadDirectory: form.querySelector('[data-option-row="uploadDirectory"]')
+    uploadDirectory: form.querySelector('[data-option-row="uploadDirectory"]'),
+    recipients: form.querySelector('[data-option-row="recipients"]'),
+    prototypeToken: form.querySelector('[data-option-row="prototypeToken"]'),
+    chatMode: form.querySelector('[data-option-row="chatMode"]')
   };
   const setRowVisible = (row, visible) => {
     if ( !row ) return;
@@ -1133,13 +1512,23 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     shareToPlayersField.disabled = !showShare;
     uploadDirectoryField.disabled = !showUploadDirectory;
 
+    if ( prototypeTokenField ) prototypeTokenField.disabled = !behavior.supportsPrototypeToken;
+    if ( chatModeField ) chatModeField.disabled = !behavior.supportsChatMode;
+
+    // Recipients apply to the share target and to the "also show" option once it is checked
+    const sharing = showShare && Boolean(shareToPlayersField.checked);
     setRowVisible(optionRows.shareToPlayers, showShare);
     setRowVisible(optionRows.activateScene, behavior.supportsActivateScene);
     setRowVisible(optionRows.navigation, behavior.supportsNavigation);
     setRowVisible(optionRows.uploadDirectory, showUploadDirectory);
+    setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
+    setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken);
+    setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
+    setRowVisible(optimizeNote, requiresPersistentPath(actionField.value, sharing));
   };
 
   actionField.addEventListener("change", updateFields);
+  shareToPlayersField.addEventListener?.("change", updateFields);
   updateFields();
 }
 
@@ -1334,6 +1723,9 @@ async function uploadClipboardFile(file, {directory=null, targetPath=null}={}) {
   if ( !response?.path ) {
     throw new Error(localize(isGM ? "SIPD.Error.UploadFailed" : "SIPD.Error.PlayerUploadFailed"));
   }
+  // A replaced background, foreground or shared image keeps its file name. Without a new URL the canvas
+  // and the players' browsers keep showing the previous image.
+  if ( reusableTarget ) return withVersionQuery(response.path, (await hashFileContent(uploadFile)).slice(0, 12));
   return response.path;
 }
 
@@ -1410,14 +1802,26 @@ async function executeAction(data) {
     case ACTIONS.TILE_FIT:
       await createTileFromImage(data, {fitToScene: true});
       break;
+    case ACTIONS.MAP_PIN:
+      await createMapPinFromImage(data);
+      break;
+    case ACTIONS.TOKEN_IMAGE:
+      await updateTokenImages(data);
+      break;
+    case ACTIONS.ACTOR_PORTRAIT:
+      await updateActorPortraits(data);
+      break;
     case ACTIONS.JOURNAL_IMAGE:
       await createJournalEntryFromImage(data);
+      break;
+    case ACTIONS.CHAT_IMAGE:
+      await postImagesToChat([{path: data.path, name: data.name}], {chatMode: data.chatMode});
       break;
     case ACTIONS.UPLOAD_DIRECTORY:
       ui.notifications.info(localize("SIPD.Notification.Uploaded", {path: data.path}));
       break;
     case ACTIONS.SHARE_IMAGE:
-      shareImageToPlayers(data.path, data.name);
+      shareImageToPlayers(data.path, data.name, data.recipients);
       break;
     case ACTIONS.PREVIEW_ONLY:
       openImagePreview(data.path, data.name, {revokeOnClose: data.temporaryObjectUrl});
@@ -1427,7 +1831,7 @@ async function executeAction(data) {
   }
 
   if ( data.shareToPlayers && actionSupportsShareToPlayers(data.action) ) {
-    shareImageToPlayers(data.path, data.name);
+    shareImageToPlayers(data.path, data.name, data.recipients);
   }
 }
 
@@ -1435,7 +1839,7 @@ function hasCanvasScene() {
   return Boolean(canvas?.scene && canvas?.ready);
 }
 
-async function createSceneFromImage({name, path, width, height, activateScene, navigation}) {
+async function createSceneFromImage({name, path, width, height, activateScene, navigation}, {notify=true}={}) {
   const scene = await Scene.create({
     name,
     navigation,
@@ -1451,7 +1855,7 @@ async function createSceneFromImage({name, path, width, height, activateScene, n
     await scene.activate();
   }
 
-  ui.notifications.info(localize("SIPD.Notification.SceneCreated", {name: scene?.name ?? name}));
+  if ( notify ) ui.notifications.info(localize("SIPD.Notification.SceneCreated", {name: scene?.name ?? name}));
   return scene;
 }
 
@@ -1637,12 +2041,6 @@ function tilesUseAnchorPosition() {
   return Number(globalThis.game?.release?.generation) >= 14;
 }
 
-// Keeps a span inside a range. A span longer than the range stays centered on it.
-function clampSpan(start, length, rangeStart, rangeLength) {
-  if ( length >= rangeLength ) return rangeStart + ((rangeLength - length) / 2);
-  return Math.min(Math.max(start, rangeStart), rangeStart + rangeLength - length);
-}
-
 function fitDimensions(width, height, maxWidth, maxHeight) {
   const scale = Math.min(maxWidth / width, maxHeight / height, 1);
   return {
@@ -1651,7 +2049,7 @@ function fitDimensions(width, height, maxWidth, maxHeight) {
   };
 }
 
-async function createJournalEntryFromImage({name, path}) {
+async function createJournalEntryFromImage({name, path}, {notify=true}={}) {
   const entry = await JournalEntry.create({
     name,
     pages: [{
@@ -1662,13 +2060,154 @@ async function createJournalEntryFromImage({name, path}) {
     }]
   });
 
+  if ( notify ) ui.notifications.info(localize("SIPD.Notification.JournalCreated", {name: entry?.name ?? name}));
+  return entry;
+}
+
+// One journal entry with an image page per image, in the order of the batch
+async function createJournalEntryWithPages({name, items}) {
+  const entry = await JournalEntry.create({
+    name,
+    pages: items.map((item, index) => ({
+      name: item.name,
+      type: "image",
+      src: item.path,
+      title: {show: false},
+      sort: (index + 1) * 100000
+    }))
+  });
+
   ui.notifications.info(localize("SIPD.Notification.JournalCreated", {name: entry?.name ?? name}));
   return entry;
 }
 
-function shareImageToPlayers(path, name) {
+// A map pin: a journal entry with the image page and a note at the drop point (or the scene center).
+async function createMapPinFromImage({name, path, dropPoint=null}) {
+  if ( !hasCanvasScene() ) {
+    throw new Error(localize("SIPD.Error.NoScene"));
+  }
+
+  const scene = canvas.scene;
+  const entry = await createJournalEntryFromImage({name, path}, {notify: false});
+  const page = entry?.pages?.contents?.[0] ?? null;
+  const point = (dropPoint?.sceneId === scene.id) ? getSnappedNotePoint(dropPoint) : null;
+  const {x, y} = clampPointToRect(point, canvas.dimensions.sceneRect);
+  const levels = getViewedLevelIds(scene);
+
+  const [note] = await scene.createEmbeddedDocuments("Note", [{
+    entryId: entry?.id ?? null,
+    ...(page?.id ? {pageId: page.id} : {}),
+    x,
+    y,
+    ...(levels ? {levels} : {})
+  }]);
+
+  ui.notifications.info(localize("SIPD.Notification.MapPinCreated", {name: entry?.name ?? name}));
+  return note;
+}
+
+// Foundry snaps dropped journal entries the same way, Shift skips it
+function getSnappedNotePoint(point) {
+  if ( !point.snap || (typeof canvas.notes?.getSnappedPoint !== "function") ) return point;
+  return canvas.notes.getSnappedPoint({x: point.x, y: point.y});
+}
+
+// Selected tokens the user may change. Players only get the tokens of actors they own.
+function getEligibleTokens() {
+  if ( !hasCanvasScene() ) return [];
+  const isGM = Boolean(game.user?.isGM);
+  return Array.from(canvas.tokens?.controlled ?? []).filter(token => token?.document && (isGM || token.document.isOwner));
+}
+
+// Actors of the selected tokens, else the user's own character.
+function getEligibleActors() {
+  const isGM = Boolean(game.user?.isGM);
+  const actors = new Map();
+  for ( const token of getEligibleTokens() ) {
+    const actor = token.actor;
+    if ( actor && (isGM || actor.isOwner) ) actors.set(actor.uuid ?? actor.id, actor);
+  }
+  const character = game.user?.character;
+  if ( !actors.size && character && (isGM || character.isOwner) ) actors.set(character.uuid ?? character.id, character);
+  return Array.from(actors.values());
+}
+
+async function updateTokenImages({path, prototypeToken=false}) {
+  const tokens = getEligibleTokens();
+  if ( !tokens.length ) {
+    throw new Error(localize("SIPD.Error.NoToken"));
+  }
+
+  const updates = tokens.map(token => ({_id: token.document.id, "texture.src": path}));
+  await canvas.scene.updateEmbeddedDocuments("Token", updates);
+
+  // Linked tokens share their actor, so the prototype keeps the new image for the next placement
+  if ( prototypeToken ) {
+    const actors = new Map();
+    for ( const token of tokens ) {
+      if ( token.document.actorLink && token.actor ) actors.set(token.actor.id, token.actor);
+    }
+    for ( const actor of actors.values() ) await actor.update({"prototypeToken.texture.src": path});
+  }
+
+  ui.notifications.info(localize("SIPD.Notification.TokenUpdated", {count: tokens.length}));
+  return tokens;
+}
+
+async function updateActorPortraits({path}) {
+  const actors = getEligibleActors();
+  if ( !actors.length ) {
+    throw new Error(localize("SIPD.Error.NoActor"));
+  }
+
+  for ( const actor of actors ) await actor.update({img: path});
+  ui.notifications.info(localize("SIPD.Notification.PortraitUpdated", {name: actors.map(actor => actor.name).join(", ")}));
+  return actors;
+}
+
+// One chat message with all images, in the user's current chat mode or public.
+async function postImagesToChat(images, {chatMode=CHAT_MODES.CURRENT}={}) {
+  const chatMessageClass = globalThis.ChatMessage?.implementation ?? globalThis.ChatMessage;
+  const chatData = {
+    content: buildChatImageContent(images, escapeHtml),
+    speaker: chatMessageClass.getSpeaker?.() ?? {}
+  };
+  const mode = chatMode === CHAT_MODES.PUBLIC ? "public" : imagePostMode(getCurrentMessageMode());
+  applyChatMessageMode(chatMessageClass, chatData, mode);
+  const message = await chatMessageClass.create(chatData);
+  ui.notifications.info(localize("SIPD.Notification.ChatPosted", {count: images.length}));
+  return message;
+}
+
+function usesMessageModes() {
+  return Number(globalThis.game?.release?.generation) >= 14;
+}
+
+// v14 calls it the message mode, v13 the roll mode
+function getCurrentMessageMode() {
+  const settingKey = usesMessageModes() ? "messageMode" : "rollMode";
+  try {
+    return toMessageMode(game.settings.get("core", settingKey));
+  } catch (_error) {
+    return "public";
+  }
+}
+
+function applyChatMessageMode(chatMessageClass, chatData, mode) {
+  if ( usesMessageModes() && (typeof chatMessageClass.applyMode === "function") ) {
+    return chatMessageClass.applyMode(chatData, mode);
+  }
+  if ( typeof chatMessageClass.applyRollMode === "function" ) {
+    return chatMessageClass.applyRollMode(chatData, toLegacyRollMode(mode));
+  }
+  return chatData;
+}
+
+// Shows the image to everyone, or only to the given users. Both Foundry versions route it by user id.
+function shareImageToPlayers(path, name, recipients=[]) {
   const journalCollection = foundry.documents.collections?.Journal ?? globalThis.Journal;
-  journalCollection.showImage(path, {title: name, showTitle: true});
+  const users = Array.isArray(recipients) ? recipients.filter(Boolean) : [];
+  journalCollection.showImage(path, {title: name, showTitle: true, ...(users.length ? {users} : {})});
 }
 
 function openImagePreview(path, name, {revokeOnClose=null}={}) {
@@ -1692,6 +2231,292 @@ function openImagePreview(path, name, {revokeOnClose=null}={}) {
   }
 
   popout.render({force: true});
+}
+
+// Targets offered for several images. Each one needs the same permission as its single-image counterpart.
+function getBatchActionChoices() {
+  const allowedActions = new Set(getPermittedActions());
+  return [
+    {value: BATCH_ACTIONS.JOURNAL_PAGES, label: localize("SIPD.Batch.Action.JournalPages"), permission: ACTIONS.JOURNAL_IMAGE},
+    {value: BATCH_ACTIONS.TILE_GRID, label: localize("SIPD.Batch.Action.TileGrid"), permission: ACTIONS.TILE_CENTERED},
+    {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Batch.Action.JournalEach"), permission: ACTIONS.JOURNAL_IMAGE},
+    {value: ACTIONS.SCENE_BACKGROUND, label: localize("SIPD.Batch.Action.SceneEach"), permission: ACTIONS.SCENE_BACKGROUND},
+    {value: ACTIONS.CHAT_IMAGE, label: localize("SIPD.Batch.Action.Chat"), permission: ACTIONS.CHAT_IMAGE},
+    {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Batch.Action.Upload"), permission: ACTIONS.UPLOAD_DIRECTORY}
+  ]
+    .filter(choice => allowedActions.has(choice.permission))
+    .map(({permission: _permission, ...choice}) => ({...choice, disabled: !isActionAvailable(choice.value)}));
+}
+
+function getBatchDialogDefaults() {
+  const choices = getBatchActionChoices().filter(choice => !choice.disabled);
+  const preferredAction = game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING)
+    ? getRegisteredSettingValue(LAST_BATCH_ACTION_SETTING, null)
+    : null;
+
+  return {
+    action: choices.find(choice => choice.value === preferredAction)?.value ?? choices[0]?.value ?? null,
+    navigation: game.settings.get(MODULE_ID, DEFAULT_NAVIGATION_SETTING),
+    uploadDirectory: normalizeUploadDirectory(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
+    uploadDirectoryChoices: getUploadDirectoryChoices(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
+    uiTheme: getUITheme()
+  };
+}
+
+function batchThumbnailsMarkup(items, defaultName) {
+  return items.map((item, index) => {
+    const label = batchItemName(defaultName, item.sourceName, index);
+    const note = item.plan
+      ? `<small>${escapeHtml(optimizeNoteText(item.plan))}</small>`
+      : "";
+    return `
+      <figure class="sipd-batch-thumb">
+        <img alt="${escapeHtml(label)}" data-batch-thumb="${index}">
+        <figcaption>
+          <span>${escapeHtml(label)}</span>
+          <small>${item.width} x ${item.height}</small>
+          ${note}
+        </figcaption>
+      </figure>`;
+  }).join("");
+}
+
+async function promptForBatchAction({items, defaultName}) {
+  const defaults = getBatchDialogDefaults();
+  const windowState = getSavedWindowState(WINDOW_KEYS.BATCH, {width: 900, height: 720});
+  const actionOptions = getBatchActionChoices().map(({value, label, disabled}) => {
+    const disabledAttribute = disabled ? " disabled" : "";
+    const selectedAttribute = value === defaults.action ? " selected" : "";
+    return `<option value="${value}"${disabledAttribute}${selectedAttribute}>${escapeHtml(label)}</option>`;
+  }).join("");
+
+  const content = `
+    <div class="sipd-shell sipd-shell--import sipd-shell--batch" data-ui-theme="${escapeHtml(defaults.uiTheme)}">
+      <section class="sipd-hero">
+        <div class="sipd-eyebrow">${localize("SIPD.Dialog.Eyebrow")}</div>
+        <div class="sipd-heading-row">
+          <div>
+            <h2 class="sipd-heading">${localize("SIPD.Batch.Title")}</h2>
+            <p class="sipd-summary">${localize("SIPD.Batch.Intro")}</p>
+          </div>
+          <div class="sipd-stat-inline">
+            <span class="sipd-stat-value">${items.length}</span>
+            <span class="sipd-stat-label">${localize("SIPD.Batch.StatsValue")}</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="sipd-dialog">
+        <section class="sipd-panel sipd-panel--preview">
+          <header class="sipd-panel-header">
+            <div class="sipd-panel-heading">
+              <span class="sipd-panel-title">${localize("SIPD.Batch.PreviewTitle")}</span>
+            </div>
+            <span class="sipd-pill is-type">${localize("SIPD.Dialog.PreviewBadge")}</span>
+          </header>
+          <div class="sipd-batch-grid">
+            ${batchThumbnailsMarkup(items, defaultName)}
+          </div>
+        </section>
+
+        <section class="sipd-panel sipd-panel--form">
+          <header class="sipd-panel-header">
+            <div class="sipd-panel-heading">
+              <span class="sipd-panel-title">${localize("SIPD.Dialog.ConfigureTitle")}</span>
+              <span class="sipd-panel-hint">${localize("SIPD.Batch.NameHint")}</span>
+            </div>
+          </header>
+
+          <div class="sipd-dialog__fields">
+            <div class="form-group">
+              <label>${localize("SIPD.Dialog.Name")}</label>
+              <div class="form-fields">
+                <input type="text" name="name" value="${escapeHtml(defaultName)}" autofocus>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>${localize("SIPD.Dialog.Action")}</label>
+              <div class="form-fields">
+                <select name="action">${actionOptions}</select>
+              </div>
+            </div>
+            <div class="form-group sipd-upload-directory-row" data-option-row="uploadDirectory">
+              <label>${localize("SIPD.Dialog.UploadDirectory")}</label>
+              <div class="form-fields sipd-field-stack">
+                <input type="text" name="uploadDirectory" value="${escapeHtml(defaults.uploadDirectory)}" list="sipd-batch-upload-directories">
+                <datalist id="sipd-batch-upload-directories">
+                  ${uploadDirectoryOptionsMarkup(defaults.uploadDirectoryChoices)}
+                </datalist>
+                <small class="sipd-field-hint">${uploadDirectoryHintMarkup()}</small>
+              </div>
+            </div>
+            <div class="form-group" data-option-row="chatMode">
+              <label>${localize("SIPD.Dialog.ChatMode")}</label>
+              <div class="form-fields">
+                <select name="chatMode">
+                  <option value="${CHAT_MODES.CURRENT}">${localize("SIPD.Dialog.ChatModeCurrent")}</option>
+                  <option value="${CHAT_MODES.PUBLIC}">${localize("SIPD.Dialog.ChatModePublic")}</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group stacked sipd-choice-stack">
+              <label class="checkbox sipd-choice-row" data-option-row="navigation">
+                <input type="checkbox" name="navigation"${defaults.navigation ? " checked" : ""}>
+                <span>
+                  <strong>${localize("SIPD.Batch.Navigation")}</strong>
+                  <small>${localize("SIPD.Dialog.NavigationHint")}</small>
+                </span>
+              </label>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  `;
+
+  return foundry.applications.api.DialogV2.wait({
+    rejectClose: false,
+    window: {
+      title: localize("SIPD.Batch.Title"),
+      resizable: true,
+      ...windowState
+    },
+    content,
+    modal: true,
+    render: (_event, dialog) => configureBatchDialogForm(dialog, defaults.uiTheme, items),
+    buttons: [
+      {
+        action: "confirm",
+        label: localize("SIPD.Dialog.Insert"),
+        default: true,
+        callback: (_event, button) => ({
+          name: button.form.elements.name.value.trim() || defaultName,
+          action: button.form.elements.action.value,
+          uploadDirectory: normalizeUploadDirectory(button.form.elements.uploadDirectory?.value),
+          navigation: Boolean(button.form.elements.navigation?.checked),
+          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT
+        })
+      },
+      {
+        action: "cancel",
+        label: localize("SIPD.Dialog.Cancel")
+      }
+    ]
+  });
+}
+
+function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
+  const form = dialog.element.querySelector("form");
+  if ( !form ) return;
+
+  dialog.element.classList.add("sipd-app", "sipd-import-dialog", "sipd-batch-dialog");
+  applyDialogTheme(dialog.element, theme);
+  styleActionButtons(form.closest(".window-content") ?? dialog.element, {
+    primaryLabel: localize("SIPD.Dialog.Insert"),
+    secondaryLabel: localize("SIPD.Dialog.Cancel")
+  });
+
+  // Blob URLs are set after rendering, like the single image preview
+  for ( const [index, item] of items.entries() ) {
+    const thumbnail = form.querySelector(`[data-batch-thumb="${index}"]`);
+    if ( thumbnail ) thumbnail.src = item.objectUrl;
+  }
+
+  applyWindowState(dialog, WINDOW_KEYS.BATCH, {width: 900, height: 720});
+  bindWindowStatePersistence(dialog, WINDOW_KEYS.BATCH);
+
+  const actionField = form.elements.action;
+  const rows = {
+    uploadDirectory: form.querySelector('[data-option-row="uploadDirectory"]'),
+    chatMode: form.querySelector('[data-option-row="chatMode"]'),
+    navigation: form.querySelector('[data-option-row="navigation"]')
+  };
+  const canChooseDirectory = Boolean(game.user?.isGM);
+  const updateFields = () => {
+    const action = actionField.value;
+    const visible = {
+      uploadDirectory: canChooseDirectory && (action === ACTIONS.UPLOAD_DIRECTORY),
+      chatMode: action === ACTIONS.CHAT_IMAGE,
+      navigation: action === ACTIONS.SCENE_BACKGROUND
+    };
+    for ( const [key, row] of Object.entries(rows) ) {
+      if ( row ) row.hidden = !visible[key];
+    }
+  };
+
+  actionField.addEventListener("change", updateFields);
+  updateFields();
+}
+
+function normalizeBatchDecision(decision) {
+  if ( !decision ) return null;
+
+  const allowedActions = new Set(getBatchActionChoices().filter(choice => !choice.disabled).map(choice => choice.value));
+  if ( !allowedActions.has(decision.action) ) return null;
+  const action = decision.action;
+
+  return {
+    name: String(decision.name ?? "").trim() || defaultDocumentName(),
+    action,
+    uploadDirectory: game.user?.isGM ? normalizeUploadDirectory(decision.uploadDirectory) : PLAYER_UPLOAD_DIRECTORY,
+    navigation: (action === ACTIONS.SCENE_BACKGROUND) && Boolean(decision.navigation),
+    chatMode: ((action === ACTIONS.CHAT_IMAGE) && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT
+  };
+}
+
+async function executeBatchAction({action, name, navigation=false, chatMode=CHAT_MODES.CURRENT, items, dropPoint=null}) {
+  switch ( action ) {
+    case BATCH_ACTIONS.JOURNAL_PAGES:
+      return createJournalEntryWithPages({name, items});
+    case BATCH_ACTIONS.TILE_GRID:
+      return createTileGrid({items, dropPoint});
+    case ACTIONS.JOURNAL_IMAGE:
+      for ( const item of items ) await createJournalEntryFromImage(item, {notify: false});
+      ui.notifications.info(localize("SIPD.Notification.BatchJournalsCreated", {count: items.length}));
+      return;
+    case ACTIONS.SCENE_BACKGROUND:
+      // Several new scenes are never activated, only the navigation choice applies
+      for ( const item of items ) {
+        await createSceneFromImage({...item, activateScene: false, navigation}, {notify: false});
+      }
+      ui.notifications.info(localize("SIPD.Notification.BatchScenesCreated", {count: items.length}));
+      return;
+    case ACTIONS.CHAT_IMAGE:
+      return postImagesToChat(items.map(({path, name: itemName}) => ({path, name: itemName})), {chatMode});
+    case ACTIONS.UPLOAD_DIRECTORY:
+      ui.notifications.info(localize("SIPD.Notification.BatchUploaded", {
+        count: items.length,
+        path: String(items[0]?.path ?? "").replace(/\/[^/]*$/, "")
+      }));
+      return;
+    default:
+      throw new Error(localize("SIPD.Error.UnsupportedAction"));
+  }
+}
+
+// Tiles in a grid around the drop point (or the scene center), spaced by one grid square, on the viewed level.
+async function createTileGrid({items, dropPoint=null}) {
+  if ( !hasCanvasScene() ) {
+    throw new Error(localize("SIPD.Error.NoScene"));
+  }
+
+  const scene = canvas.scene;
+  const center = (dropPoint?.sceneId === scene.id) ? {x: dropPoint.x, y: dropPoint.y} : null;
+  const layout = layoutTileGrid(items, canvas.dimensions.sceneRect, {
+    gap: Number(canvas.dimensions?.size) || 100,
+    center,
+    anchor: tilesUseAnchorPosition()
+  });
+  const levels = getViewedLevelIds(scene);
+  const tiles = await scene.createEmbeddedDocuments("Tile", items.map((item, index) => ({
+    name: item.name,
+    ...layout[index],
+    texture: {src: item.path},
+    ...(levels ? {levels} : {})
+  })));
+
+  ui.notifications.info(localize("SIPD.Notification.BatchTilesCreated", {count: items.length}));
+  return tiles;
 }
 
 function localize(key, formatters) {
@@ -1724,19 +2549,28 @@ export const __test__ = {
   UI_LANGUAGE_SETTING,
   UI_THEME_SETTING,
   WINDOW_STATE_SETTING,
+  LAST_BATCH_ACTION_SETTING,
+  MAX_IMAGE_SIZE_SETTING,
+  CONVERT_WEBP_SETTING,
+  WEBP_QUALITY_SETTING,
   WORLD_STORAGE_ROOT,
   SUPPORTED_UI_LANGUAGES,
   UI_THEMES,
   WINDOW_KEYS,
   ACTIONS,
+  BATCH_ACTIONS,
+  CHAT_MODES,
   PLAYER_SELECTABLE_ACTIONS,
   REMOTE_URL_ACTIONS,
+  SCENE_ACTIONS,
   PLAYER_UPLOAD_DIRECTORY,
   SHARED_UPLOAD_DIRECTORY,
   getAllActionChoices,
   getActionSettingChoices,
   getPlayerActionSettingChoices,
   getThemeSettingChoices,
+  getMaxImageSizeChoices,
+  onRenderChatMessage,
   normalizeUiLanguage,
   getPreferredLanguage,
   getModuleLanguage,
@@ -1749,10 +2583,16 @@ export const __test__ = {
   onDrop,
   isEditableTarget,
   extractClipboardImage,
+  extractClipboardImages,
+  collectImageFiles,
   extractClipboardImageUrl,
+  extractClipboardImageUrls,
   parseImageUrl,
   hasTransferableImage,
   extractDroppedImage,
+  extractDroppedImageFiles,
+  extractDroppedImageUrls,
+  getDroppedUri,
   fetchDroppedImage,
   createFetchFailedError,
   guessMimeTypeFromUri,
@@ -1764,12 +2604,19 @@ export const __test__ = {
   getPermittedActions,
   importImage,
   handleImportedImage,
+  getDecisionOptions,
+  getImageOptimizationOptions,
+  prepareUploadFile,
+  importImageBatch,
+  handleImportedBatch,
   handleRemoteImageUrl,
   confirmRemoteImageUrl,
   getUrlHostLabel,
   promptForImportDecision,
   requiresPersistentPath,
   normalizeActionDecision,
+  getAllUserIds,
+  getShareRecipientChoices,
   defaultUploadDirectory,
   isForge,
   getStorageSource,
@@ -1790,9 +2637,15 @@ export const __test__ = {
   uniqueDocumentName,
   readImageDimensions,
   promptForAction,
+  optimizeNoteMarkup,
+  optimizeNoteText,
+  recipientsMarkup,
+  readCheckedRecipients,
+  uploadDirectoryHintMarkup,
   uploadDirectoryOptionsMarkup,
   actionOptionsMarkup,
   getActionChoices,
+  isActionAvailable,
   getActionBehavior,
   actionSupportsShareToPlayers,
   actionUsesSelectableUploadDirectory,
@@ -1833,8 +2686,27 @@ export const __test__ = {
   clampSpan,
   fitDimensions,
   createJournalEntryFromImage,
+  createJournalEntryWithPages,
+  createMapPinFromImage,
+  getSnappedNotePoint,
+  getEligibleTokens,
+  getEligibleActors,
+  updateTokenImages,
+  updateActorPortraits,
+  postImagesToChat,
+  usesMessageModes,
+  getCurrentMessageMode,
+  applyChatMessageMode,
   shareImageToPlayers,
   openImagePreview,
+  getBatchActionChoices,
+  getBatchDialogDefaults,
+  batchThumbnailsMarkup,
+  promptForBatchAction,
+  configureBatchDialogForm,
+  normalizeBatchDecision,
+  executeBatchAction,
+  createTileGrid,
   localize,
   escapeHtml
 };

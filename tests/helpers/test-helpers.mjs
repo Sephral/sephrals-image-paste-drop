@@ -96,8 +96,15 @@ function stableValue(value) {
 
 function createHooksStub() {
   const onceHandlers = new Map();
+  const onHandlers = new Map();
   return {
     onceHandlers,
+    onHandlers,
+    on(event, handler) {
+      const bucket = onHandlers.get(event) ?? [];
+      bucket.push(handler);
+      onHandlers.set(event, bucket);
+    },
     once(event, handler) {
       const bucket = onceHandlers.get(event) ?? [];
       bucket.push(handler);
@@ -149,6 +156,9 @@ export function createTestEnvironment() {
     objectUrls: [],
     sceneCreates: [],
     journalCreates: [],
+    chatCreates: [],
+    users: [],
+    coreSettings: {},
     imageBehavior: { width: 320, height: 200, error: false },
     resizeObservers: [],
     fetchImpl: async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }), json: async () => ({}) }),
@@ -168,7 +178,7 @@ export function createTestEnvironment() {
     set src(value) {
       this._src = value;
       queueMicrotask(() => {
-        if (state.imageBehavior.error) this.onerror?.(new Error("image error"));
+        if (state.imageBehavior.error || state.imageBehavior.failSources?.includes(value)) this.onerror?.(new Error("image error"));
         else {
           this.naturalWidth = state.imageBehavior.width;
           this.naturalHeight = state.imageBehavior.height;
@@ -318,6 +328,7 @@ export function createTestEnvironment() {
         state.settingsRegistry.set(`${moduleId}.${key}`, data);
       },
       get(moduleId, key) {
+        if (moduleId === "core") return state.coreSettings[key];
         return state.settingsValues.get(`${moduleId}.${key}`);
       },
       async set(moduleId, key, value) {
@@ -325,6 +336,9 @@ export function createTestEnvironment() {
         state.settingsValues.set(`${moduleId}.${key}`, value);
         return value;
       }
+    },
+    get users() {
+      return state.users;
     },
     user: {
       get isGM() {
@@ -397,6 +411,26 @@ export function createTestEnvironment() {
     }
   };
 
+  const ChatMessage = {
+    getSpeaker() {
+      return { alias: "Speaker" };
+    },
+    applyRollMode(chatData, rollMode) {
+      chatData.rollMode = rollMode;
+      chatData.whisper = rollMode === "publicroll" ? [] : ["gm-user"];
+      return chatData;
+    },
+    applyMode(chatData, mode) {
+      chatData.messageMode = mode;
+      chatData.whisper = mode === "public" ? [] : ["gm-user"];
+      return chatData;
+    },
+    async create(data) {
+      state.chatCreates.push(data);
+      return data;
+    }
+  };
+
   const originalDateNow = Date.now;
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -411,6 +445,7 @@ export function createTestEnvironment() {
   globalThis.canvas = canvas;
   globalThis.Scene = Scene;
   globalThis.JournalEntry = JournalEntry;
+  globalThis.ChatMessage = ChatMessage;
   globalThis.Image = TestImage;
   globalThis.ResizeObserver = TestResizeObserver;
   globalThis.window = globalThis;
@@ -504,6 +539,9 @@ export function createTestEnvironment() {
     state.objectUrls = [];
     state.sceneCreates = [];
     state.journalCreates = [];
+    state.chatCreates = [];
+    state.users = [];
+    state.coreSettings = {};
     state.imageBehavior = { width: 320, height: 200, error: false };
     state.resizeObservers = [];
     state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }), json: async () => ({}) });
