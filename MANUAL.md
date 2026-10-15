@@ -84,7 +84,11 @@ Two settings make uploads smaller before they leave your browser:
 * *Shrink large images*: images whose longer side is above the chosen size (2048, 4096 or 8192 pixels) are scaled down. Off by default.
 * *Save uploads as WebP*: PNG and JPEG images are converted to WebP, which is usually much smaller. *WebP quality* sets the quality (85 by default).
 
-GIFs, SVGs and animated images are never changed, because shrinking would lose the animation or the vector graphics. When a conversion alone would not make the file smaller, the original is kept. The dialog shows the size and format the upload will have, and for a conversion alone that it only happens when the file gets smaller. Previews and directly used image links are not changed.
+GIFs, SVGs and animated images are never changed, because shrinking would lose the animation or the vector graphics. When a conversion alone would not make the file smaller, the original is kept. Previews and directly used image links are not changed.
+
+When an upload would be shrunk or converted, the import dialog shows a checkbox such as *Save optimized: 2048 x 1024, WebP*. It names the new size, the new format or both, and it is checked by default, so the settings apply. Uncheck it to upload this one image in its original size and format. The settings stay as they are and the next import uses them again. For a conversion alone the hint below the checkbox says that it only happens when the file gets smaller. The checkbox only appears for targets that upload a file, not for `Preview only`.
+
+The dialog for several images has one checkbox for all of them. Its label names the size limit and the target format, its hint says how many of the images are affected, and each affected thumbnail shows its new size or format. Unchecked, every image of this batch is uploaded as it is.
 
 Scenes and tiles created from a shrunk image use its new size.
 

@@ -121,6 +121,50 @@ function formatLabelForType(type) {
   return FORMAT_LABELS[type] ?? String(type ?? "").replace(/^image\//, "").toUpperCase();
 }
 
+// What a plan changes compared to the source file. A pure format change is only kept when it makes the file smaller.
+function describeOptimizationPlan(plan, sourceType) {
+  if ( !plan ) return null;
+  const scaled = Boolean(plan.scaled);
+  const converted = plan.type !== sourceType;
+  if ( !scaled && !converted ) return null;
+  return {
+    scaled,
+    converted,
+    width: plan.width,
+    height: plan.height,
+    format: formatLabelForType(plan.type),
+    ifSmaller: !scaled
+  };
+}
+
+// One summary for several images: how many change, whether any gets scaled and which formats they get.
+function summarizeOptimizationPlans(entries=[]) {
+  const described = entries.map(entry => describeOptimizationPlan(entry?.plan, entry?.type)).filter(Boolean);
+  if ( !described.length ) return null;
+  const formats = [...new Set(described.filter(entry => entry.converted).map(entry => entry.format))];
+  return {
+    count: described.length,
+    total: entries.length,
+    scaled: described.some(entry => entry.scaled),
+    converted: formats.length > 0,
+    format: formats.join(", "),
+    ifSmaller: described.every(entry => entry.ifSmaller)
+  };
+}
+
+// Label variant for the "save optimized" checkbox: size and format, size only or format only.
+function optimizationLabelVariant({scaled=false, converted=false}={}) {
+  if ( scaled && converted ) return "ScaleFormat";
+  if ( scaled ) return "Scale";
+  return "Format";
+}
+
+// The settings decide how an upload is optimized, the checkbox of one import can switch that off.
+function resolveOptimizationOptions(options={}, optimize=true) {
+  if ( optimize !== false ) return options;
+  return {...options, maxSize: 0, webp: false};
+}
+
 function replaceFileExtension(fileName, type) {
   const extension = TYPE_EXTENSIONS[type] ?? "png";
   const baseName = String(fileName ?? "").replace(/\.[^./]+$/, "") || "image";
@@ -199,6 +243,10 @@ export {
   hasOptimizationOptions,
   planImageOptimization,
   formatLabelForType,
+  describeOptimizationPlan,
+  summarizeOptimizationPlans,
+  optimizationLabelVariant,
+  resolveOptimizationOptions,
   replaceFileExtension,
   getImageOptimizationPlan,
   optimizeImageFile

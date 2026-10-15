@@ -87,10 +87,12 @@
   align-items: start;
 }
 
+/* Core colors h2 with the emphatic text color of the Foundry theme, which is light in the dark theme */
 .sipd-heading {
   margin: 0.15rem 0 0;
   font-size: 1.1rem;
   line-height: 1.2;
+  color: var(--sipd-ink);
 }
 
 .sipd-summary,
@@ -218,6 +220,7 @@
   display: block;
   width: 100%;
   min-height: 12rem;
+  max-height: 24rem;
   height: auto;
   object-fit: contain;
 }
@@ -404,10 +407,26 @@
   filter: brightness(1.02);
 }
 
-.sipd-optimize-note {
-  margin: 0;
-  font-size: 0.72rem;
-  color: var(--sipd-muted);
+/* The import dialogs fit their height to the content. When the screen is too small, the content scrolls and the buttons stay visible. */
+.sipd-import-dialog .window-content {
+  overflow: hidden;
+}
+
+.sipd-import-dialog .window-content > .dialog-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sipd-import-dialog .dialog-content {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sipd-import-dialog .form-footer {
+  flex: none;
 }
 
 .sipd-recipient-list {
@@ -451,13 +470,19 @@
   aspect-ratio: 1;
   object-fit: contain;
   border: none;
+  box-shadow: none;
 }
 
+/* Core gives figcaption the emphatic color of the Foundry theme, italic and centered */
 .sipd-batch-thumb figcaption {
   display: grid;
   min-width: 0;
-  font-size: 0.68rem;
+  margin: 0;
+  font-size: 0.72rem;
+  font-style: normal;
   line-height: 1.3;
+  text-align: start;
+  color: var(--sipd-ink);
 }
 
 .sipd-batch-thumb figcaption span {
@@ -465,10 +490,20 @@
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--sipd-ink);
 }
 
 .sipd-batch-thumb figcaption small {
   color: var(--sipd-muted);
+}
+
+.sipd-batch-thumb figcaption .sipd-batch-thumb__optimized {
+  color: var(--sipd-accent);
+  font-weight: 700;
+}
+
+.sipd-batch-thumb figcaption .sipd-batch-thumb__optimized[hidden] {
+  display: none;
 }
 
 .sipd-batch-dialog .sipd-dialog {

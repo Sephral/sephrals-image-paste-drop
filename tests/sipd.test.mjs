@@ -358,7 +358,8 @@ test("user access, directory, and naming helpers normalize values and permission
     navigation: false,
     recipients: [],
     prototypeToken: false,
-    chatMode: "current"
+    chatMode: "current",
+    optimize: true
   });
 
   assert.equal(__test__.requiresPersistentPath(__test__.ACTIONS.PREVIEW_ONLY, false), false);
@@ -440,9 +441,13 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     navigation: true,
     recipients: [],
     prototypeToken: false,
-    chatMode: "current"
+    chatMode: "current",
+    optimize: true
   });
   assert.match(env.state.lastDialogOptions.content, /sipd-shell/);
+  // The height follows the content, only the width comes from the saved window state
+  assert.deepEqual(env.state.lastDialogOptions.position, { width: 860, height: "auto" });
+  assert.equal(env.state.lastDialogOptions.window.height, undefined);
 });
 
 test("dialog configuration, action choices, and defaults respond to selected actions and themes", () => {
@@ -495,7 +500,9 @@ test("window state helpers read, apply, persist, and bind application sizes", as
     preview: { width: 500.6, height: 333.2 }
   });
   assert.deepEqual(__test__.getSavedWindowStates(), { import: { width: 200, height: 100 }, preview: { width: 500.6, height: 333.2 } });
-  assert.deepEqual(__test__.getSavedWindowState(__test__.WINDOW_KEYS.IMPORT, { width: 860, height: 720 }), { width: 320, height: 240 });
+  // The import dialogs only remember their width, their height follows the content
+  assert.deepEqual(__test__.getSavedWindowState(__test__.WINDOW_KEYS.IMPORT, { width: 860, height: 720 }), { width: 320 });
+  assert.deepEqual(__test__.getSavedWindowState(__test__.WINDOW_KEYS.BATCH, { width: 900 }), { width: 900 });
   assert.deepEqual(__test__.getSavedWindowState(__test__.WINDOW_KEYS.PREVIEW, {}), { width: 501, height: 333 });
 
   const element = new TestHTMLElement();
@@ -1166,7 +1173,8 @@ function batchForm(values) {
         action: { value: values.action },
         uploadDirectory: { value: values.uploadDirectory ?? "custom" },
         navigation: { checked: Boolean(values.navigation) },
-        chatMode: { value: values.chatMode ?? "current" }
+        chatMode: { value: values.chatMode ?? "current" },
+        ...("optimize" in values ? { optimize: { checked: values.optimize } } : {})
       }
     }
   };
@@ -1259,8 +1267,18 @@ test("batch dialog wiring shows thumbnails and the options of the chosen target"
   const element = new TestHTMLElement();
   element.setQuerySelector("form", form);
 
+  const optimizeNotes = [new TestHTMLElement()];
+  const optimizeField = { checked: true, listeners: [], addEventListener(_type, handler) { this.listeners.push(handler); } };
+  form.elements.optimize = optimizeField;
+  form.setQuerySelectorAll("[data-optimize-thumb]", optimizeNotes);
+
   __test__.configureBatchDialogForm({ element, position: {} }, __test__.UI_THEMES.FOUNDRY, [{ objectUrl: "blob:a" }, { objectUrl: "blob:b" }]);
   assert.deepEqual(thumbs.map((thumb) => thumb.src), ["blob:a", "blob:b"]);
+  // The size below a thumbnail hides while the batch checkbox is unchecked
+  assert.equal(optimizeNotes[0].hidden, false);
+  optimizeField.checked = false;
+  optimizeField.listeners[0]();
+  assert.equal(optimizeNotes[0].hidden, true);
   assert.equal(element.classList.contains("sipd-batch-dialog"), true);
   assert.deepEqual([rows.uploadDirectory.hidden, rows.chatMode.hidden, rows.navigation.hidden], [false, true, true]);
 
@@ -1630,7 +1648,7 @@ test("the import dialog shows recipients, prototype and chat options only where 
   const extraRows = { recipients: new TestHTMLElement(), prototypeToken: new TestHTMLElement(), chatMode: new TestHTMLElement() };
   for ( const [key, row] of Object.entries(extraRows) ) dialog.form.setQuerySelector(`[data-option-row="${key}"]`, row);
   const note = new TestHTMLElement();
-  dialog.form.setQuerySelector("[data-optimize-note]", note);
+  dialog.form.setQuerySelector('[data-option-row="optimize"]', note);
   dialog.form.elements.prototypeToken = { checked: true, disabled: false };
   dialog.form.elements.chatMode = { value: "current", disabled: false };
   const shareListeners = [];
@@ -1692,7 +1710,8 @@ test("uploads are shrunk and converted to WebP when the settings ask for it, GIF
   try {
     assert.deepEqual(__test__.getImageOptimizationOptions(), { maxSize: 256, webp: true, quality: 80 });
     await __test__.handleImportedImage(createImageFile("Big.png", "image/png", "a png image"));
-    assert.match(env.state.lastDialogOptions.content, /data-optimize-note/);
+    assert.match(env.state.lastDialogOptions.content, /name="optimize" checked/);
+    assert.match(env.state.lastDialogOptions.content, /SIPD\.Dialog\.OptimizeScaleFormat/);
     assert.deepEqual(encoded, [{ width: 256, height: 160 }, { type: "image/webp", quality: 0.8 }]);
     const uploaded = env.state.uploadCalls[0].file;
     assert.equal(uploaded.type, "image/webp");
@@ -1704,7 +1723,7 @@ test("uploads are shrunk and converted to WebP when the settings ask for it, GIF
     await __test__.handleImportedImage(createImageFile("Anim.gif", "image/gif", "gif data"));
     assert.equal(encoded.length, 0);
     assert.match(env.state.uploadCalls[1].file.name, /\.gif$/);
-    assert.doesNotMatch(env.state.lastDialogOptions.content, /data-optimize-note/);
+    assert.doesNotMatch(env.state.lastDialogOptions.content, /data-option-row="optimize"/);
   } finally {
     globalThis.createImageBitmap = originalBitmap;
     globalThis.OffscreenCanvas = originalCanvas;
@@ -1725,13 +1744,146 @@ test("images posted to chat open in a popout on click", () => {
   assert.equal(__test__.getMaxImageSizeChoices()[4096], "4096 px");
 });
 
-test("the optimize note only promises a format change that makes the file smaller", () => {
-  const scaled = { width: 2048, height: 1024, scaled: true, type: "image/webp" };
-  const converted = { width: 300, height: 200, scaled: false, type: "image/webp" };
-  assert.match(__test__.optimizeNoteText(scaled), /^SIPD\.Dialog\.OptimizeNote\b(?!IfSmaller)/);
-  assert.match(__test__.optimizeNoteText(converted), /^SIPD\.Dialog\.OptimizeNoteIfSmaller/);
-  assert.match(__test__.optimizeNoteMarkup(converted), /data-optimize-note/);
-  assert.equal(__test__.optimizeNoteMarkup(null), "");
+test("the optimize checkbox names size and format and only promises a format change that makes the file smaller", () => {
+  const both = { scaled: true, converted: true, width: 2048, height: 1024, format: "WebP", ifSmaller: false };
+  const scaleOnly = { scaled: true, converted: false, width: 2048, height: 1024, format: "PNG", ifSmaller: false };
+  const formatOnly = { scaled: false, converted: true, width: 300, height: 200, format: "WebP", ifSmaller: true };
+  assert.equal(__test__.optimizeLabelText(both), "SIPD.Dialog.OptimizeScaleFormat");
+  assert.equal(__test__.optimizeLabelText(scaleOnly), "SIPD.Dialog.OptimizeScale");
+  assert.equal(__test__.optimizeLabelText(formatOnly), "SIPD.Dialog.OptimizeFormat");
+  assert.equal(__test__.optimizeHintText(both), "SIPD.Dialog.OptimizeHint");
+  assert.equal(__test__.optimizeHintText(formatOnly), "SIPD.Dialog.OptimizeHintIfSmaller");
+
+  env.state.localizations.set("SIPD.Dialog.OptimizeScaleFormat", "Save optimized: {width} x {height}, {format}");
+  assert.equal(__test__.optimizeLabelText(both), "Save optimized: 2048 x 1024, WebP");
+  env.state.localizations.delete("SIPD.Dialog.OptimizeScaleFormat");
+
+  const markup = __test__.optimizeChoiceMarkup(formatOnly);
+  assert.match(markup, /data-option-row="optimize"/);
+  assert.match(markup, /<input type="checkbox" name="optimize" checked>/);
+  assert.equal(__test__.optimizeChoiceMarkup(null), "");
+  assert.match(__test__.optimizeChoiceMarkup(both, { label: "A <b>", hint: "B" }), /A &lt;b&gt;/);
+});
+
+test("the optimize decision defaults to the settings and only an unchecked box turns it off", () => {
+  const { ACTIONS, BATCH_ACTIONS } = __test__;
+  assert.equal(__test__.readOptimizeCheckbox({ elements: {} }), true);
+  assert.equal(__test__.readOptimizeCheckbox(null), true);
+  assert.equal(__test__.readOptimizeCheckbox({ elements: { optimize: { checked: true } } }), true);
+  assert.equal(__test__.readOptimizeCheckbox({ elements: { optimize: { checked: false } } }), false);
+
+  assert.equal(__test__.readOptimizeChoice({}), true);
+  assert.equal(__test__.readOptimizeChoice({ optimize: "no" }), true);
+  assert.equal(__test__.readOptimizeChoice({ optimize: false }), false);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE, optimize: false }).optimize, false);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE }).optimize, true);
+  assert.equal(__test__.normalizeBatchDecision({ action: BATCH_ACTIONS.JOURNAL_PAGES, optimize: false }).optimize, false);
+  assert.equal(__test__.normalizeBatchDecision({ action: BATCH_ACTIONS.JOURNAL_PAGES }).optimize, true);
+});
+
+test("an unchecked optimize box uploads the original file of this import and keeps the settings", async () => {
+  const { ACTIONS } = __test__;
+  setSetting(__test__.CONVERT_WEBP_SETTING, true);
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 256);
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  let encodes = 0;
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage() {} };
+    }
+    async convertToBlob() {
+      encodes += 1;
+      return new Blob(["w"], { type: "image/webp" });
+    }
+  };
+  env.canvas.ready = true;
+  env.canvas.scene = createBatchScene();
+  env.state.uploadResponse = { path: "uploaded.png" };
+  env.state.dialogWaitResult = { name: "Original", action: ACTIONS.TILE_CENTERED, uploadDirectory: "custom", optimize: false };
+
+  try {
+    await __test__.handleImportedImage(createImageFile("Big.png", "image/png", "a png image"));
+    assert.equal(encodes, 0);
+    const uploaded = env.state.uploadCalls[0].file;
+    assert.equal(uploaded.type, "image/png");
+    assert.match(uploaded.name, /\.png$/);
+    assert.deepEqual([env.canvas.scene.tileDocs[0].width, env.canvas.scene.tileDocs[0].height], [320, 200]);
+    assert.equal(env.state.settingWrites.some((entry) => [__test__.CONVERT_WEBP_SETTING, __test__.MAX_IMAGE_SIZE_SETTING].includes(entry.key)), false);
+
+    // The next import follows the settings again
+    env.state.dialogWaitResult = { name: "Shrunk", action: ACTIONS.TILE_CENTERED, uploadDirectory: "custom" };
+    await __test__.handleImportedImage(createImageFile("Big.png", "image/png", "a png image"));
+    assert.equal(encodes, 1);
+    assert.equal(env.state.uploadCalls[1].file.type, "image/webp");
+
+    const original = createImageFile("x.png", "image/png", "x");
+    const kept = await __test__.prepareUploadFile(original, { width: 320, height: 200 }, { optimize: false });
+    assert.equal(kept.file, original);
+    assert.deepEqual([kept.width, kept.height], [320, 200]);
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});
+
+test("the batch dialog offers one optimize checkbox for all images and passes the choice to every upload", async () => {
+  const { BATCH_ACTIONS } = __test__;
+  setSetting(__test__.CONVERT_WEBP_SETTING, true);
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 256);
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  let encodes = 0;
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage() {} };
+    }
+    async convertToBlob() {
+      encodes += 1;
+      return new Blob(["w"], { type: "image/webp" });
+    }
+  };
+  env.state.uploadResponse = { path: "uploaded.png" };
+  const dialogs = answerDialogs({ name: "Handouts", action: BATCH_ACTIONS.JOURNAL_PAGES, optimize: false });
+
+  try {
+    await __test__.handleImportedBatch([
+      createImageFile("one.png", "image/png", "one"),
+      createImageFile("two.gif", "image/gif", "two")
+    ]);
+    assert.equal(dialogs.length, 1);
+    const content = dialogs[0].content;
+    assert.equal((content.match(/name="optimize"/g) ?? []).length, 1);
+    assert.match(content, /SIPD\.Batch\.OptimizeScaleFormat/);
+    assert.match(content, /SIPD\.Batch\.OptimizeHint\b/);
+    assert.equal((content.match(/data-optimize-thumb/g) ?? []).length, 1);
+    assert.deepEqual(dialogs[0].position, { width: 900, height: "auto" });
+    assert.equal(encodes, 0);
+    assert.deepEqual(env.state.uploadCalls.map((call) => call.file.type), ["image/png", "image/gif"]);
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});
+
+test("batch optimize texts summarize the plans of all images", () => {
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 2048);
+  env.state.localizations.set("SIPD.Batch.OptimizeScale", "Save optimized: at most {size} px");
+  env.state.localizations.set("SIPD.Batch.OptimizeHintIfSmaller", "Applies to {count} of {total} images");
+  const scaled = { plan: { width: 2048, height: 1024, scaled: true, type: "image/png" }, file: { type: "image/png" } };
+  const converted = { plan: { width: 300, height: 200, scaled: false, type: "image/webp" }, file: { type: "image/png" } };
+  const untouched = { plan: null, file: { type: "image/gif" } };
+
+  assert.match(__test__.batchOptimizeChoiceMarkup([scaled, untouched]), /Save optimized: at most 2048 px/);
+  assert.match(__test__.batchOptimizeChoiceMarkup([converted, untouched]), /Applies to 1 of 2 images/);
+  assert.match(__test__.batchOptimizeChoiceMarkup([scaled, converted]), /SIPD\.Batch\.OptimizeScaleFormat/);
+  assert.equal(__test__.batchOptimizeChoiceMarkup([untouched]), "");
+  assert.equal(__test__.batchThumbOptimizeText({ scaled: true, converted: true, width: 2048, height: 1024, format: "WebP" }), "\u2192 2048 x 1024 WebP");
+  assert.equal(__test__.batchThumbOptimizeText({ scaled: false, converted: true, format: "WebP" }), "\u2192 WebP");
+  env.state.localizations.delete("SIPD.Batch.OptimizeScale");
+  env.state.localizations.delete("SIPD.Batch.OptimizeHintIfSmaller");
 });
 
 test("the upload directory hint names the storage root as escaped text", () => {

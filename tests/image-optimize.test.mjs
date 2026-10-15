@@ -90,6 +90,56 @@ test("format labels and file extensions follow the output type", () => {
   assert.equal(optimize.replaceFileExtension("", "image/png"), "image.png");
 });
 
+test("describeOptimizationPlan tells whether a plan scales, converts or both", () => {
+  const plan = (type, scaled, width = 2048, height = 1024) => ({ width, height, scaled, type });
+  assert.deepEqual(optimize.describeOptimizationPlan(plan("image/webp", true), "image/png"), {
+    scaled: true, converted: true, width: 2048, height: 1024, format: "WebP", ifSmaller: false
+  });
+  assert.deepEqual(optimize.describeOptimizationPlan(plan("image/png", true), "image/png"), {
+    scaled: true, converted: false, width: 2048, height: 1024, format: "PNG", ifSmaller: false
+  });
+  // A conversion alone is only kept when the file gets smaller
+  assert.equal(optimize.describeOptimizationPlan(plan("image/webp", false, 300, 200), "image/jpeg").ifSmaller, true);
+  assert.equal(optimize.describeOptimizationPlan(null, "image/png"), null);
+  assert.equal(optimize.describeOptimizationPlan(plan("image/png", false), "image/png"), null);
+
+  assert.equal(optimize.optimizationLabelVariant({ scaled: true, converted: true }), "ScaleFormat");
+  assert.equal(optimize.optimizationLabelVariant({ scaled: true, converted: false }), "Scale");
+  assert.equal(optimize.optimizationLabelVariant({ scaled: false, converted: true }), "Format");
+  assert.equal(optimize.optimizationLabelVariant(), "Format");
+});
+
+test("summarizeOptimizationPlans counts the changed images of a batch and collects their formats", () => {
+  const scaled = { plan: { width: 2048, height: 1024, scaled: true, type: "image/png" }, type: "image/png" };
+  const webp = { plan: { width: 300, height: 200, scaled: false, type: "image/webp" }, type: "image/png" };
+  const avif = { plan: { width: 2048, height: 1024, scaled: true, type: "image/png" }, type: "image/avif" };
+  const gif = { plan: null, type: "image/gif" };
+
+  assert.equal(optimize.summarizeOptimizationPlans([gif]), null);
+  assert.equal(optimize.summarizeOptimizationPlans(), null);
+  assert.deepEqual(optimize.summarizeOptimizationPlans([scaled, gif]), {
+    count: 1, total: 2, scaled: true, converted: false, format: "", ifSmaller: false
+  });
+  assert.deepEqual(optimize.summarizeOptimizationPlans([webp, webp, gif]), {
+    count: 2, total: 3, scaled: false, converted: true, format: "WebP", ifSmaller: true
+  });
+  assert.deepEqual(optimize.summarizeOptimizationPlans([scaled, webp, avif]), {
+    count: 3, total: 3, scaled: true, converted: true, format: "WebP, PNG", ifSmaller: false
+  });
+});
+
+test("resolveOptimizationOptions keeps the settings unless the import opts out", () => {
+  const options = { maxSize: 2048, webp: true, quality: 80 };
+  assert.equal(optimize.resolveOptimizationOptions(options), options);
+  assert.equal(optimize.resolveOptimizationOptions(options, true), options);
+  assert.equal(optimize.resolveOptimizationOptions(options, undefined), options);
+  const off = optimize.resolveOptimizationOptions(options, false);
+  assert.deepEqual(off, { maxSize: 0, webp: false, quality: 80 });
+  assert.equal(optimize.hasOptimizationOptions(off), false);
+  // The settings object itself stays untouched
+  assert.deepEqual(options, { maxSize: 2048, webp: true, quality: 80 });
+});
+
 test("optimizeImageFile re-encodes through a canvas and keeps the original when that does not help", async () => {
   const drawn = [];
   let outputType = "image/webp";

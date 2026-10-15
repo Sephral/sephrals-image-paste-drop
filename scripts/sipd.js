@@ -1,8 +1,11 @@
 import {
-  formatLabelForType,
+  describeOptimizationPlan,
   getImageOptimizationPlan,
   hasOptimizationOptions,
-  optimizeImageFile
+  optimizationLabelVariant,
+  optimizeImageFile,
+  resolveOptimizationOptions,
+  summarizeOptimizationPlans
 } from "./image-optimize.js";
 import {
   batchItemName,
@@ -56,6 +59,10 @@ const WINDOW_KEYS = {
   PREVIEW: "preview",
   BATCH: "batch"
 };
+// The import dialogs fit their height to the content. Only their width is remembered.
+const AUTO_HEIGHT_WINDOW_KEYS = Object.freeze([WINDOW_KEYS.IMPORT, WINDOW_KEYS.BATCH]);
+const IMPORT_WINDOW_WIDTH = 860;
+const BATCH_WINDOW_WIDTH = 900;
 const ACTIONS = {
   SCENE_BACKGROUND: "scene-background",
   SCENE_BACKGROUND_CURRENT: "scene-background-current",
@@ -739,16 +746,18 @@ async function handleImportedImage(file, {dropPoint=null}={}) {
   try {
     const dimensions = await readImageDimensions(objectUrl);
     const optimizePlan = await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
-    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions, optimizePlan});
+    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions, optimizePlan, sourceType: preparedFile.type});
     if ( !decision ) return;
 
     if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
       await rememberUploadDirectory(decision.uploadDirectory);
     }
 
-    // Shrinking and WebP only apply to uploads. The file name hashes the final bytes.
+    // Shrinking and WebP only apply to uploads, unless the dialog switched them off. The file name hashes the final bytes.
     const needsUpload = requiresPersistentPath(decision.action, decision.shareToPlayers);
-    const upload = needsUpload ? await prepareUploadFile(preparedFile, dimensions) : {file: preparedFile, ...dimensions};
+    const upload = needsUpload
+      ? await prepareUploadFile(preparedFile, dimensions, {optimize: decision.optimize})
+      : {file: preparedFile, ...dimensions};
     const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, upload.file);
     const path = needsUpload
       ? await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory, targetPath: reusableUploadTarget})
@@ -790,9 +799,9 @@ function getImageOptimizationOptions() {
   };
 }
 
-// The file that gets uploaded, shrunk or converted when the settings ask for it.
-async function prepareUploadFile(file, dimensions) {
-  const options = getImageOptimizationOptions();
+// The file that gets uploaded, shrunk or converted when the settings ask for it and the import did not opt out.
+async function prepareUploadFile(file, dimensions, {optimize=true}={}) {
+  const options = resolveOptimizationOptions(getImageOptimizationOptions(), optimize);
   if ( !hasOptimizationOptions(options) ) return {file, ...dimensions};
   const result = await optimizeImageFile(file, dimensions, options);
   return {file: result.file, width: result.width, height: result.height};
@@ -863,7 +872,7 @@ async function handleImportedBatch(files, {dropPoint=null}={}) {
     ui.notifications.info(localize("SIPD.Notification.BatchUploading", {count: items.length}));
     const results = [];
     for ( const [position, item] of items.entries() ) {
-      const upload = await prepareUploadFile(item.file, {width: item.width, height: item.height});
+      const upload = await prepareUploadFile(item.file, {width: item.width, height: item.height}, {optimize: decision.optimize});
       const path = await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory});
       results.push({
         path,
@@ -951,14 +960,15 @@ function getUrlHostLabel(url) {
   return String(url ?? "").slice(0, 60);
 }
 
-async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null}) {
+async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
     width,
     height,
     remoteUrl,
-    optimizePlan
+    optimizePlan,
+    sourceType
   }), {remoteUrl});
   if ( !decision ) return null;
 
@@ -990,8 +1000,14 @@ function normalizeActionDecision(decision, {remoteUrl=false}={}) {
     navigation: behavior.supportsNavigation && Boolean(decision.navigation),
     recipients: sharing ? normalizeRecipientIds(decision.recipients, getAllUserIds()) : [],
     prototypeToken: behavior.supportsPrototypeToken && Boolean(decision.prototypeToken),
-    chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT
+    chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
+    optimize: readOptimizeChoice(decision)
   };
+}
+
+// Only an unchecked "save optimized" box turns optimizing off. Without the box the settings apply.
+function readOptimizeChoice(decision) {
+  return decision?.optimize !== false;
 }
 
 function getAllUserIds() {
@@ -1180,9 +1196,10 @@ async function readImageDimensions(src) {
   });
 }
 
-async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null}) {
+async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null}) {
   const defaults = getDialogDefaults({remoteUrl});
-  const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: 860, height: 720});
+  const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
+  const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
   const content = `
     <div class="sipd-shell sipd-shell--import" data-ui-theme="${escapeHtml(defaults.uiTheme)}">
       <section class="sipd-hero">
@@ -1211,7 +1228,6 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           <div class="sipd-dialog__preview">
             <img alt="${escapeHtml(defaultName)}" data-preview-image>
           </div>
-          ${optimizeNoteMarkup(optimizePlan)}
         </section>
 
         <section class="sipd-panel sipd-panel--form">
@@ -1286,6 +1302,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                   <small>${localize("SIPD.Dialog.NavigationHint")}</small>
                 </span>
               </label>
+              ${optimizeChoiceMarkup(optimizeDescription)}
             </div>
           </div>
         </section>
@@ -1297,9 +1314,10 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     rejectClose: false,
     window: {
       title: localize("SIPD.Dialog.Title"),
-      resizable: true,
-      ...importWindowState
+      resizable: true
     },
+    // The height follows the content, only the width is remembered
+    position: {...importWindowState, height: "auto"},
     content,
     modal: true,
     render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl),
@@ -1317,7 +1335,8 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           navigation: button.form.elements.navigation.checked,
           recipients: readCheckedRecipients(button.form),
           prototypeToken: Boolean(button.form.elements.prototypeToken?.checked),
-          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT
+          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
+          optimize: readOptimizeCheckbox(button.form)
         })
       },
       {
@@ -1328,16 +1347,32 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
   });
 }
 
-// Hint below the preview when uploads get shrunk or converted
-function optimizeNoteMarkup(plan) {
-  if ( !plan ) return "";
-  return `<p class="sipd-optimize-note" data-optimize-note>${escapeHtml(optimizeNoteText(plan))}</p>`;
+// Checkbox for uploads that get shrunk or converted. Checked by default, unchecked uploads the original file.
+function optimizeChoiceMarkup(description, {label=null, hint=null}={}) {
+  if ( !description ) return "";
+  return `
+              <label class="checkbox sipd-choice-row sipd-optimize-choice" data-option-row="optimize">
+                <input type="checkbox" name="optimize" checked>
+                <span>
+                  <strong>${escapeHtml(label ?? optimizeLabelText(description))}</strong>
+                  <small>${escapeHtml(hint ?? optimizeHintText(description))}</small>
+                </span>
+              </label>`;
 }
 
-// A pure format change is only kept when it makes the file smaller, so the note does not promise it.
-function optimizeNoteText(plan) {
-  const data = {width: plan.width, height: plan.height, format: formatLabelForType(plan.type)};
-  return localize(plan.scaled ? "SIPD.Dialog.OptimizeNote" : "SIPD.Dialog.OptimizeNoteIfSmaller", data);
+function optimizeLabelText(description) {
+  const variant = optimizationLabelVariant(description);
+  return localize(`SIPD.Dialog.Optimize${variant}`, {width: description.width, height: description.height, format: description.format});
+}
+
+// A pure format change is only kept when it makes the file smaller, so the hint does not promise it.
+function optimizeHintText(description) {
+  return localize(description.ifSmaller ? "SIPD.Dialog.OptimizeHintIfSmaller" : "SIPD.Dialog.OptimizeHint");
+}
+
+function readOptimizeCheckbox(form) {
+  const field = form?.elements?.optimize;
+  return field ? Boolean(field.checked) : true;
 }
 
 // No recipient checked means everyone
@@ -1476,7 +1511,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     previewImage.src = previewUrl;
   }
 
-  applyWindowState(dialog, WINDOW_KEYS.IMPORT, {width: 860, height: 720});
+  applyWindowState(dialog, WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   bindWindowStatePersistence(dialog, WINDOW_KEYS.IMPORT);
 
   const actionField = form.elements.action;
@@ -1486,7 +1521,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
   const uploadDirectoryField = form.elements.uploadDirectory;
   const prototypeTokenField = form.elements.prototypeToken;
   const chatModeField = form.elements.chatMode;
-  const optimizeNote = form.querySelector("[data-optimize-note]");
+  const optimizeRow = form.querySelector('[data-option-row="optimize"]');
   const optionRows = {
     shareToPlayers: form.querySelector('[data-option-row="shareToPlayers"]'),
     activateScene: form.querySelector('[data-option-row="activateScene"]'),
@@ -1524,7 +1559,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
     setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken);
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
-    setRowVisible(optimizeNote, requiresPersistentPath(actionField.value, sharing));
+    setRowVisible(optimizeRow, requiresPersistentPath(actionField.value, sharing));
   };
 
   actionField.addEventListener("change", updateFields);
@@ -1573,7 +1608,9 @@ function getSavedWindowStates() {
 function getSavedWindowState(key, fallback={}) {
   const state = getSavedWindowStates()?.[key] ?? {};
   const width = Number.isFinite(state.width) ? Math.max(320, Math.round(state.width)) : fallback.width;
-  const height = Number.isFinite(state.height) ? Math.max(240, Math.round(state.height)) : fallback.height;
+  const height = AUTO_HEIGHT_WINDOW_KEYS.includes(key)
+    ? undefined
+    : (Number.isFinite(state.height) ? Math.max(240, Math.round(state.height)) : fallback.height);
   return {
     ...(Number.isFinite(width) ? {width} : {}),
     ...(Number.isFinite(height) ? {height} : {})
@@ -2266,8 +2303,9 @@ function getBatchDialogDefaults() {
 function batchThumbnailsMarkup(items, defaultName) {
   return items.map((item, index) => {
     const label = batchItemName(defaultName, item.sourceName, index);
-    const note = item.plan
-      ? `<small>${escapeHtml(optimizeNoteText(item.plan))}</small>`
+    const description = describeOptimizationPlan(item.plan, item.file?.type);
+    const note = description
+      ? `<small class="sipd-batch-thumb__optimized" data-optimize-thumb>${escapeHtml(batchThumbOptimizeText(description))}</small>`
       : "";
     return `
       <figure class="sipd-batch-thumb">
@@ -2281,9 +2319,27 @@ function batchThumbnailsMarkup(items, defaultName) {
   }).join("");
 }
 
+// Short result below a thumbnail, for example "2048 x 1024 WebP". It hides when the batch checkbox is unchecked.
+function batchThumbOptimizeText(description) {
+  const parts = [];
+  if ( description.scaled ) parts.push(`${description.width} x ${description.height}`);
+  if ( description.converted ) parts.push(description.format);
+  return `\u2192 ${parts.join(" ")}`;
+}
+
+// One checkbox for every image of the batch. The label names the size limit and the target format.
+function batchOptimizeChoiceMarkup(items) {
+  const summary = summarizeOptimizationPlans(items.map(item => ({plan: item.plan, type: item.file?.type})));
+  if ( !summary ) return "";
+  const variant = optimizationLabelVariant(summary);
+  const label = localize(`SIPD.Batch.Optimize${variant}`, {size: getImageOptimizationOptions().maxSize, format: summary.format});
+  const hint = localize(summary.ifSmaller ? "SIPD.Batch.OptimizeHintIfSmaller" : "SIPD.Batch.OptimizeHint", {count: summary.count, total: summary.total});
+  return optimizeChoiceMarkup(summary, {label, hint});
+}
+
 async function promptForBatchAction({items, defaultName}) {
   const defaults = getBatchDialogDefaults();
-  const windowState = getSavedWindowState(WINDOW_KEYS.BATCH, {width: 900, height: 720});
+  const windowState = getSavedWindowState(WINDOW_KEYS.BATCH, {width: BATCH_WINDOW_WIDTH});
   const actionOptions = getBatchActionChoices().map(({value, label, disabled}) => {
     const disabledAttribute = disabled ? " disabled" : "";
     const selectedAttribute = value === defaults.action ? " selected" : "";
@@ -2367,6 +2423,7 @@ async function promptForBatchAction({items, defaultName}) {
                   <small>${localize("SIPD.Dialog.NavigationHint")}</small>
                 </span>
               </label>
+              ${batchOptimizeChoiceMarkup(items)}
             </div>
           </div>
         </section>
@@ -2378,9 +2435,10 @@ async function promptForBatchAction({items, defaultName}) {
     rejectClose: false,
     window: {
       title: localize("SIPD.Batch.Title"),
-      resizable: true,
-      ...windowState
+      resizable: true
     },
+    // The height follows the content, only the width is remembered
+    position: {...windowState, height: "auto"},
     content,
     modal: true,
     render: (_event, dialog) => configureBatchDialogForm(dialog, defaults.uiTheme, items),
@@ -2394,7 +2452,8 @@ async function promptForBatchAction({items, defaultName}) {
           action: button.form.elements.action.value,
           uploadDirectory: normalizeUploadDirectory(button.form.elements.uploadDirectory?.value),
           navigation: Boolean(button.form.elements.navigation?.checked),
-          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT
+          chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
+          optimize: readOptimizeCheckbox(button.form)
         })
       },
       {
@@ -2422,7 +2481,7 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
     if ( thumbnail ) thumbnail.src = item.objectUrl;
   }
 
-  applyWindowState(dialog, WINDOW_KEYS.BATCH, {width: 900, height: 720});
+  applyWindowState(dialog, WINDOW_KEYS.BATCH, {width: BATCH_WINDOW_WIDTH});
   bindWindowStatePersistence(dialog, WINDOW_KEYS.BATCH);
 
   const actionField = form.elements.action;
@@ -2446,6 +2505,17 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
 
   actionField.addEventListener("change", updateFields);
   updateFields();
+
+  // The size and format below each thumbnail only apply while the batch checkbox is checked
+  const optimizeField = form.elements.optimize;
+  const thumbNotes = Array.from(form.querySelectorAll?.("[data-optimize-thumb]") ?? []);
+  const updateThumbNotes = () => {
+    for ( const note of thumbNotes ) note.hidden = !optimizeField.checked;
+  };
+  if ( optimizeField ) {
+    optimizeField.addEventListener?.("change", updateThumbNotes);
+    updateThumbNotes();
+  }
 }
 
 function normalizeBatchDecision(decision) {
@@ -2460,7 +2530,8 @@ function normalizeBatchDecision(decision) {
     action,
     uploadDirectory: game.user?.isGM ? normalizeUploadDirectory(decision.uploadDirectory) : PLAYER_UPLOAD_DIRECTORY,
     navigation: (action === ACTIONS.SCENE_BACKGROUND) && Boolean(decision.navigation),
-    chatMode: ((action === ACTIONS.CHAT_IMAGE) && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT
+    chatMode: ((action === ACTIONS.CHAT_IMAGE) && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
+    optimize: readOptimizeChoice(decision)
   };
 }
 
@@ -2637,8 +2708,13 @@ export const __test__ = {
   uniqueDocumentName,
   readImageDimensions,
   promptForAction,
-  optimizeNoteMarkup,
-  optimizeNoteText,
+  optimizeChoiceMarkup,
+  optimizeLabelText,
+  optimizeHintText,
+  readOptimizeCheckbox,
+  readOptimizeChoice,
+  batchThumbOptimizeText,
+  batchOptimizeChoiceMarkup,
   recipientsMarkup,
   readCheckedRecipients,
   uploadDirectoryHintMarkup,
