@@ -1,4 +1,4 @@
-# Sephral's Image Paste & Drop Manual
+# Sephral’s Image Paste & Drop Manual
 
 This manual covers the details. For a quick overview see the [README](README.md).
 
@@ -136,6 +136,14 @@ Every user can configure on the module settings page:
 * whether uploads are saved as WebP, and in which quality
 
 World settings for the GM: player access, additional player targets and the storage folder.
+
+The gear in the title bar of the import window closes it and opens these settings.
+
+*Run self test* (GM) checks the file picker, the storage folder, the targets, WebP in your browser and whether players may upload files. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once.
+
+## Macros
+
+`game.modules.get("sephrals-image-paste-drop").api.runSelfTest()` runs the self test (GM).
 
 ## Where images are stored
 

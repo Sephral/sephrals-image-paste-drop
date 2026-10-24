@@ -45,6 +45,9 @@ const LAST_BATCH_ACTION_SETTING = "lastBatchAction";
 const MAX_IMAGE_SIZE_SETTING = "maxImageSize";
 const CONVERT_WEBP_SETTING = "convertToWebp";
 const WEBP_QUALITY_SETTING = "webpQuality";
+const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
+// The Foundry version the module was verified against (see the self-test).
+const TESTED_VERSIONS = Object.freeze({core: "14.369"});
 const MAX_IMAGE_SIZE_CHOICES = Object.freeze([0, 2048, 4096, 8192]);
 const WORLD_STORAGE_ROOT = MODULE_ID;
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
@@ -428,6 +431,22 @@ Hooks.once("init", () => {
     default: 85
   });
 
+  game.settings.register(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, {
+    scope: "client",
+    config: false,
+    type: String,
+    default: ""
+  });
+
+  game.settings.registerMenu(MODULE_ID, "selfTest", {
+    name: localize("SIPD.SelfTest.Title"),
+    label: localize("SIPD.SelfTest.Run"),
+    hint: localize("SIPD.SelfTest.Hint"),
+    icon: "fa-solid fa-stethoscope",
+    type: SelfTestMenu,
+    restricted: true
+  });
+
   Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 });
 
@@ -447,7 +466,9 @@ function onRenderChatMessage(_message, html) {
 }
 
 Hooks.once("ready", () => {
-  void ensureModuleTranslationsLoaded();
+  void ensureModuleTranslationsLoaded().then(() => noticeNewVersions());
+  const module = game.modules?.get?.(MODULE_ID);
+  if ( module ) module.api = {runSelfTest};
   void ensurePlayerStorageDirectories();
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
@@ -1500,6 +1521,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
 
   dialog.element.classList.add("sipd-app", "sipd-import-dialog");
   applyDialogTheme(dialog.element, theme);
+  addSettingsGear(dialog);
   const windowContent = form.closest(".window-content") ?? dialog.element;
   styleActionButtons(windowContent, {
     primaryLabel: localize("SIPD.Dialog.Insert"),
@@ -2470,6 +2492,7 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
 
   dialog.element.classList.add("sipd-app", "sipd-import-dialog", "sipd-batch-dialog");
   applyDialogTheme(dialog.element, theme);
+  addSettingsGear(dialog);
   styleActionButtons(form.closest(".window-content") ?? dialog.element, {
     primaryLabel: localize("SIPD.Dialog.Insert"),
     secondaryLabel: localize("SIPD.Dialog.Cancel")
@@ -2599,6 +2622,125 @@ function localize(key, formatters) {
 
 function escapeHtml(value) {
   return foundry.utils.escapeHTML(String(value ?? ""));
+}
+
+// Whether the current user finds settings of this module in the settings dialog.
+function hasOwnSettings() {
+  if ( game.user?.isGM ) return true;
+  return Array.from(game.settings.settings.values()).some(setting => (setting.namespace === MODULE_ID) && setting.config && (setting.scope !== "world"));
+}
+
+// Opens Foundry's settings on the tab of this module.
+async function openModuleSettings() {
+  const sheet = game.settings.sheet;
+  await sheet.render({force: true});
+  try {
+    sheet.changeTab(MODULE_ID, "categories");
+  } catch ( error ) {
+    console.warn(`${MODULE_ID} | The settings have no tab for this module`, error);
+  }
+  sheet.bringToFront?.();
+}
+
+// A gear in the title bar of the import window. The window is modal, so it closes before the settings open.
+function addSettingsGear(dialog) {
+  const header = dialog.element?.querySelector(".window-header");
+  if ( !header || header.querySelector(".sipd-settings") || !hasOwnSettings() ) return;
+  const label = localize("SIPD.Dialog.Settings");
+  const gear = document.createElement("button");
+  gear.type = "button";
+  gear.className = "header-control icon fa-solid fa-gear sipd-settings";
+  gear.dataset.tooltip = label;
+  gear.setAttribute("aria-label", label);
+  gear.addEventListener("click", async event => {
+    event.preventDefault();
+    event.stopPropagation();
+    await dialog.close();
+    await openModuleSettings();
+  });
+  const anchor = header.querySelector("[data-action=toggleControls]") ?? header.querySelector("[data-action=close]");
+  if ( anchor ) anchor.before(gear);
+  else header.append(gear);
+}
+
+// Self-test: the file picker, the storage folder, the documents the targets create, WebP in this browser and the
+// upload permission of players. Meant to be run after every Foundry update; the GM also gets a notice once when a
+// newer Foundry is installed.
+async function checkIntegrations() {
+  const problems = [];
+  let checks = 0;
+  const check = (ok, key, data) => {
+    checks++;
+    if ( !ok ) problems.push(localize(`SIPD.SelfTest.${key}`, data));
+  };
+
+  const filePicker = getFilePickerClass();
+  check((typeof filePicker?.upload === "function") && (typeof filePicker?.createDirectory === "function"), "FilePicker");
+
+  let storage = true;
+  try {
+    await ensureDirectoryExists(filePicker, getRootedStoragePath(STORAGE_ROOT));
+  } catch ( error ) {
+    storage = false;
+    console.warn(`${MODULE_ID} | Self-test could not create the storage folder`, error);
+  }
+  check(storage, "Storage", {folder: getRootedStoragePath(STORAGE_ROOT)});
+
+  const targets = [CONFIG.Scene?.documentClass, CONFIG.Tile?.documentClass, CONFIG.JournalEntry?.documentClass,
+    foundry.applications?.apps?.ImagePopout];
+  check(targets.every(Boolean), "Targets");
+  check(game.i18n.has("SIPD.Dialog.Title"), "Texts");
+
+  if ( game.settings.get(MODULE_ID, CONVERT_WEBP_SETTING) ) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    check(canvas.toDataURL("image/webp").startsWith("data:image/webp"), "Webp");
+  }
+
+  // Players who may use the tool upload their images, and Foundry only allows that with the upload permission.
+  const uploads = Array.from(getPlayerActionWhitelist()).some(action => action !== ACTIONS.PREVIEW_ONLY);
+  if ( game.settings.get(MODULE_ID, ALLOW_PLAYER_TOOL_SETTING) && uploads ) {
+    const roles = game.permissions?.FILES_UPLOAD ?? [];
+    check(roles.some(role => role < CONST.USER_ROLES.GAMEMASTER), "PlayerUpload");
+  }
+  return {problems, checks};
+}
+
+// Runs the self-test and reports the result as a notification and a whispered chat message.
+async function runSelfTest({report = true} = {}) {
+  await ensureModuleTranslationsLoaded();
+  const {problems, checks} = await checkIntegrations();
+  const versions = localize("SIPD.SelfTest.Version", {current: game.version, tested: TESTED_VERSIONS.core});
+  const summary = problems.length
+    ? localize("SIPD.SelfTest.Problems", {problems: problems.length, checks})
+    : localize("SIPD.SelfTest.Passed", {checks});
+
+  if ( problems.length ) ui.notifications.warn(summary, {permanent: true});
+  else ui.notifications.info(summary);
+
+  if ( report ) {
+    let content = `<h3>${escapeHtml(localize("SIPD.SelfTest.Title"))}</h3><p>${escapeHtml(summary)}</p><p><small>${escapeHtml(versions)}</small></p>`;
+    if ( problems.length ) content += `<ul>${problems.map(problem => `<li>${escapeHtml(problem)}</li>`).join("")}</ul>`;
+    await ChatMessage.implementation.create({content, whisper: [game.user.id], speaker: {alias: game.modules.get(MODULE_ID)?.title}});
+  }
+  return {problems, checks};
+}
+
+// Tells the GM once when Foundry is newer than the version the module was verified against.
+function noticeNewVersions() {
+  if ( !game.user?.isGM || !foundry.utils.isNewerVersion(game.version, TESTED_VERSIONS.core) ) return;
+  const signature = `core ${game.version}`;
+  if ( game.settings.get(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING) === signature ) return;
+  void game.settings.set(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, signature);
+  ui.notifications.info(localize("SIPD.SelfTest.NewVersions", {versions: signature}), {permanent: true});
+}
+
+// The menu button which runs the self-test. Foundry only accepts application classes as menus.
+class SelfTestMenu extends foundry.applications.api.ApplicationV2 {
+  async render() {
+    if ( game.user?.isGM ) await runSelfTest();
+    return this;
+  }
 }
 
 export const __test__ = {
@@ -2784,6 +2926,11 @@ export const __test__ = {
   executeBatchAction,
   createTileGrid,
   localize,
+  addSettingsGear,
+  hasOwnSettings,
+  runSelfTest,
+  noticeNewVersions,
+  TESTED_VERSIONS,
   escapeHtml
 };
 

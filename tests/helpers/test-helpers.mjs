@@ -264,12 +264,21 @@ export function createTestEnvironment() {
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;");
       },
+      isNewerVersion(version, other) {
+        const parts = (value) => String(value ?? "").split(".").map(Number);
+        const [a, b] = [parts(version), parts(other)];
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+          if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+        }
+        return false;
+      },
       diffObject(left, right) {
         return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right)) ? {} : { changed: true };
       }
     },
     applications: {
       api: {
+        ApplicationV2: class ApplicationV2 {},
         DialogV2: {
           async wait(options) {
             state.lastDialogOptions = options;
@@ -326,6 +335,9 @@ export function createTestEnvironment() {
       register(moduleId, key, data) {
         state.registerCalls.push({ moduleId, key, data });
         state.settingsRegistry.set(`${moduleId}.${key}`, data);
+      },
+      registerMenu(moduleId, key, data) {
+        state.registerMenuCalls = [...(state.registerMenuCalls ?? []), { moduleId, key, data }];
       },
       get(moduleId, key) {
         if (moduleId === "core") return state.coreSettings[key];

@@ -1,4 +1,4 @@
-# Sephral's Image Paste & Drop
+# Sephral’s Image Paste & Drop
 
 **Found the perfect map online? Press Ctrl+V.** Image Paste & Drop turns any image from your clipboard, your desktop or a web page into a scene, a tile, a handout or a picture for your players, in seconds.
 
@@ -31,7 +31,7 @@ By default only the GM can use it. Player access is one setting away.
 
 Search for **Image Paste & Drop** in Foundry's module browser or open the [package page](https://foundryvtt.com/packages/sephrals-image-paste-drop).
 
-Foundry VTT v13 and v14 · any game system · works on The Forge · English and German
+Foundry VTT 13 and 14 · any game system · works on The Forge · English and German
 
 ## Learn more
 

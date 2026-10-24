@@ -11,6 +11,6 @@
     "release:prepare": "node build/prepare-release.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

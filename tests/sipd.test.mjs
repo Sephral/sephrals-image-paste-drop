@@ -92,7 +92,7 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 20);
+  assert.equal(env.state.registerCalls.length, 21);
   const maxSize = env.state.registerCalls.find((entry) => entry.key === __test__.MAX_IMAGE_SIZE_SETTING);
   assert.equal(maxSize.data.default, 0);
   assert.deepEqual(Object.keys(maxSize.data.choices), ["0", "2048", "4096", "8192"]);
