@@ -22,6 +22,7 @@ import {
   toMessageMode,
   withVersionQuery
 } from "./target-helpers.js";
+import {countFeature, registerUsage} from "./usage.mjs";
 
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
@@ -121,6 +122,22 @@ const SCENE_ACTIONS = Object.freeze([
   ACTIONS.MAP_PIN,
   BATCH_ACTIONS.TILE_GRID
 ]);
+// Usage counter per import target. Upload only and preview create nothing in the world and are not counted.
+const TARGET_USAGE_FEATURES = Object.freeze({
+  [ACTIONS.SCENE_BACKGROUND]: "sceneImage",
+  [ACTIONS.SCENE_BACKGROUND_CURRENT]: "sceneImage",
+  [ACTIONS.SCENE_FOREGROUND_CURRENT]: "sceneImage",
+  [ACTIONS.TILE_CENTERED]: "tileImage",
+  [ACTIONS.TILE_FIT]: "tileImage",
+  [BATCH_ACTIONS.TILE_GRID]: "tileImage",
+  [ACTIONS.JOURNAL_IMAGE]: "journalImage",
+  [BATCH_ACTIONS.JOURNAL_PAGES]: "journalImage",
+  [ACTIONS.MAP_PIN]: "journalImage",
+  [ACTIONS.TOKEN_IMAGE]: "tokenImage",
+  [ACTIONS.ACTOR_PORTRAIT]: "tokenImage",
+  [ACTIONS.CHAT_IMAGE]: "showToPlayers",
+  [ACTIONS.SHARE_IMAGE]: "showToPlayers"
+});
 const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
 // Players cannot create directories, so their uploads go into folders a GM client prepares.
 const PLAYER_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/players`;
@@ -447,6 +464,11 @@ Hooks.once("init", () => {
     restricted: true
   });
 
+  registerUsage(MODULE_ID, {
+    features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers"],
+    settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING]
+  });
+
   Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 });
 
@@ -491,6 +513,7 @@ async function onPaste(event) {
 
   event.preventDefault();
   event.stopPropagation();
+  countFeature(MODULE_ID, "imagePaste");
 
   try {
     if ( batch.length > 1 ) await importImageBatch(batch);
@@ -524,6 +547,7 @@ async function onDrop(event) {
 
   event.preventDefault();
   event.stopPropagation();
+  countFeature(MODULE_ID, "imageDrop");
 
   // Tiles from a drop onto the canvas go where the image was dropped
   const dropPoint = getCanvasDropPoint(event);
@@ -904,6 +928,8 @@ async function handleImportedBatch(files, {dropPoint=null}={}) {
     }
 
     await executeBatchAction({...decision, items: results, dropPoint});
+    countFeature(MODULE_ID, "batchImport");
+    countImportTarget(decision.action);
   } finally {
     for ( const item of items ) URL.revokeObjectURL(item.objectUrl);
   }
@@ -1892,6 +1918,12 @@ async function executeAction(data) {
   if ( data.shareToPlayers && actionSupportsShareToPlayers(data.action) ) {
     shareImageToPlayers(data.path, data.name, data.recipients);
   }
+  countImportTarget(data.action);
+}
+
+function countImportTarget(action) {
+  const feature = TARGET_USAGE_FEATURES[action];
+  if ( feature ) countFeature(MODULE_ID, feature);
 }
 
 function hasCanvasScene() {
