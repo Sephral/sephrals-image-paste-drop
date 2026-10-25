@@ -40,7 +40,7 @@ export function resolveManifestPath(root, env = process.env) {
   return fs.existsSync(built) ? built : path.join(root, "module.json");
 }
 
-/** Public texts use no semicolons and no dashes as punctuation. */
+/** Plain punctuation for the release text. */
 function tidy(text) {
   return text.replace(/;/g, ",").replace(/\s+[-–—]+\s+/g, ", ").replace(/\s+/g, " ").trim();
 }

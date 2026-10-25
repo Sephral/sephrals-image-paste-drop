@@ -2,7 +2,7 @@
 
 Version 1.0
 
-Copyright © 2026 Jan van der Meulen / Sephral.  
+Copyright © 2026 Sephral.  
 All rights reserved.
 
 This license applies to the software module identified in the accompanying module manifest, repository, or distribution package (the “Module”).

@@ -1,9 +1,8 @@
 /**
  * Sephral usage statistics, shared by all Sephral modules.
  *
- * Source: FoundryVTT_Module/_shared/usage/usage.mjs in the foundry_development repo. Every module carries an identical
- * copy as scripts/usage.mjs. Never edit a copy: change the source, raise LIB_VERSION and run
- * `node FoundryVTT_Module/_tools/sync-shared.mjs`. Rules and versioning: FoundryVTT_Module/_shared/usage/README.md.
+ * Every module carries an identical copy as scripts/usage.mjs. Never change one copy alone: all copies stay the same,
+ * and every change raises LIB_VERSION.
  *
  * Only the active GM's browser sends, at most once a day, one ping for all Sephral modules of the world, and only after
  * the GM agreed. Nothing here may disturb a module: every entry point catches its own errors, nothing is awaited by the
@@ -15,7 +14,7 @@
 /* -------------------------------------------- */
 
 /** Version of this file. Raise it with every change; the newest copy in a world runs for all modules. */
-export const LIB_VERSION = 1;
+export const LIB_VERSION = 2;
 
 /** Version of the ping format ("v"). Raise it only for breaking changes; the server keeps a parser per version. */
 export const FORMAT_VERSION = 1;
@@ -27,7 +26,7 @@ export const CONSENT_VERSION = 1;
 const STATE_VERSION = 1;
 
 /**
- * Whether this copy may run at all. Shipped switched off until the texts and the privacy notice are final: then nothing
+ * Whether this copy may run at all. Shipped switched off until the author switches it on: then nothing
  * is shown, asked, counted or sent. A later copy with ACTIVE true serves the modules of switched-off copies too.
  */
 const ACTIVE = false;
@@ -37,20 +36,16 @@ const ACTIVE = false;
 /* -------------------------------------------- */
 
 const ENDPOINT = "https://usage.nat20.party/v1/ping";
-const PRIVACY_URL = "https://github.com/Sephral/Sephral/blob/main/PRIVACY.md";
 
-/** Installed on the developer's own Foundry servers: nothing is asked, counted or sent there. */
+/** A marker module: while it is installed on a server, nothing is asked, counted or sent there. */
 const OPTOUT_MODULE = "sephrals-usage-optout";
-
-/** The developer's own servers: never send from pages under this domain. */
-const OPTOUT_HOST = /(^|\.)nat20\.party$/i;
 
 /** localStorage switches of this browser. */
 const OPTOUT_KEY = "sephral-usage-optout";
 const DEBUG_KEY = "sephral-usage-debug";
 const STATE_KEY = "sephral-usage";
 
-/** Third-party modules a ping may name. Keep in sync with usage-server/modules.json. */
+/** Third-party modules a ping may name. Keep in sync with the list on the server. */
 const INTEGRATIONS = ["dice-so-nice", "ember", "item-piles", "lib-wrapper", "midi-qol", "ready-set-roll-5e",
   "seasons-and-stars", "socketlib", "tidy5e-sheet"];
 
@@ -245,12 +240,11 @@ function consentAction(consent) {
 /** Why this page never takes part, or null. */
 function optOutReason() {
   if ( globalThis.game?.modules?.get?.(OPTOUT_MODULE) && !testOverride() ) return "module";
-  if ( OPTOUT_HOST.test(globalThis.location?.hostname ?? "") && !testOverride() ) return "host";
   if ( storageGet(OPTOUT_KEY) === "1" ) return "browser";
   return null;
 }
 
-/** Live tests may point the library at a local endpoint and ignore the developer opt-outs, never in production. */
+/** Live tests may point the library at a local endpoint and ignore the opt-out marker, never in production. */
 function testOverride() {
   return !!globalThis.SEPHRAL_USAGE_ENDPOINT && !!globalThis.SEPHRAL_USAGE_IGNORE_OPTOUT;
 }
@@ -382,6 +376,9 @@ async function question(renewal) {
       {action: "yes", label: text("yes"), icon: "fa-solid fa-check", default: true, callback: () => "yes"},
       {action: "no", label: text("no"), icon: "fa-solid fa-xmark", callback: () => "no"}
     ],
+    // Unfolding the full list makes the window taller: move it so the buttons stay on screen
+    render: (event, dialog) => safe(() => dialog.element.querySelector("details")?.addEventListener("toggle",
+      () => safe(() => dialog.setPosition({height: "auto"})))),
     rejectClose: false
   });
   return (answer === "yes") || (answer === "no") ? answer : null;
@@ -458,7 +455,6 @@ async function openPanel(reg) {
     const status = reason ? text(`optout_${reason}`) : text(on ? "statusOn" : "statusOff");
     const content = `<p>${escape(status)}</p>`
       + (consent.id && on ? `<p>${escape(text("worldId"))} <code>${escape(consent.id)}</code></p>` : "")
-      + `<p><a href="${PRIVACY_URL}" target="_blank" rel="noopener">${escape(text("privacy"))}</a></p>`
       + `<details><summary>${escape(text("preview"))}</summary><pre style="max-height:300px;overflow:auto;`
       + `user-select:text">${escape(JSON.stringify(payload, null, 2))}</pre></details>`;
     const buttons = [{action: "dismiss", label: text("close"), icon: "fa-solid fa-xmark", callback: () => null}];
@@ -477,12 +473,14 @@ async function openPanel(reg) {
   }
 }
 
+/** The question: a short summary, everything that is sent to unfold below it. */
 function askContent(renewal) {
-  const items = text("sentList").map(item => `<li>${escape(item)}</li>`).join("");
+  const list = (key, style = "") => `<ul${style}>${text(key).map(item => `<li>${escape(item)}</li>`).join("")}</ul>`;
   return `${renewal ? `<p><strong>${escape(text("renewal"))}</strong></p>` : ""}`
-    + `<p>${escape(text("askIntro"))}</p><ul>${items}</ul>`
-    + `<p>${escape(text("notSent"))}</p>`
-    + `<p>${escape(text("askScope"))} <a href="${PRIVACY_URL}" target="_blank" rel="noopener">${escape(text("privacy"))}</a></p>`;
+    + `<p>${escape(text("askIntro"))}</p>${list("shortList")}`
+    + `<details><summary>${escape(text("detailsLabel"))}</summary>${list("sentList", " style=\"max-height:40vh;overflow-y:auto\"")}`
+    + `<p>${escape(text("notSent"))}</p></details>`
+    + `<p>${escape(text("askScope"))}</p>`;
 }
 
 /* -------------------------------------------- */
@@ -770,8 +768,7 @@ function escape(value) {
 /* -------------------------------------------- */
 
 /*
- * Written by the module author (FoundryVTT_Module/_shared/usage/texte-vorlage.md, 2026-10-25); user-facing text must be
- * human-authored (Foundry AI Content Policy 4.1). The texts live here instead of the lang files so that one file serves
+ * Written by the module author (2026-10-25). User-facing text must be human-authored (Foundry AI Content Policy 4.1). The texts live here instead of the lang files so that one file serves
  * every module.
  */
 const TEXT = {
@@ -782,7 +779,13 @@ const TEXT = {
     toggleName: "Share usage statistics",
     toggleHint: "This setting applies to all of Sephral’s modules in this world.",
     askTitle: "Help improve Sephral’s modules?",
-    askIntro: "May Sephral’s modules send a pseudonymous usage report once a day? It includes the following information:",
+    askIntro: "A small pseudonymous report once a day, without names, chats or anything from your world:",
+    shortList: [
+      "Foundry, system and module versions",
+      "which features are used and how often",
+      "where errors occur in the module code"
+    ],
+    detailsLabel: "Show all details",
     sentList: [
       "Foundry version, game system and version, and world language",
       "Whether the world is hosted on The Forge and which browser family the GM uses (Chrome/Edge, Firefox, Safari, or Foundry app)",
@@ -794,15 +797,13 @@ const TEXT = {
       "A randomly generated, persistent world ID to associate reports with the same world and allow deletion on request"
     ],
     notSent: "No world, player, scene, actor, or user file names, chat messages, notes, dice rolls, player counts, or server addresses are sent. The IP address is technically received by the server but is not stored.",
-    askScope: "Your choice applies to all of Sephral’s modules in this world and can be changed at any time in the module settings.",
+    askScope: "Applies to all of Sephral’s modules in this world and can be changed any time in the settings.",
     renewal: "The usage report now includes additional information. Please choose again whether you want to share it.",
-    privacy: "Privacy notice",
     yes: "Yes, share",
     no: "No, thanks",
     statusOn: "Usage statistics are enabled for this world.",
     statusOff: "Usage statistics are disabled for this world.",
     optout_module: "Sending usage data is disabled on this server.",
-    optout_host: "Sending usage data is disabled on this server.",
     optout_browser: "Sending usage data is disabled in this browser.",
     worldId: "World ID for deletion requests:",
     preview: "Preview usage report",
@@ -817,7 +818,13 @@ const TEXT = {
     toggleName: "Nutzungsstatistik teilen",
     toggleHint: "Diese Einstellung gilt für alle Sephral’s Module in dieser Welt.",
     askTitle: "Hilfst du, Sephral’s Module zu verbessern?",
-    askIntro: "Dürfen Sephral’s Module einmal täglich einen pseudonymen Nutzungsbericht senden? Er enthält folgende Angaben:",
+    askIntro: "Einmal am Tag ein kleiner pseudonymer Bericht, ohne Namen, Chats oder Inhalte deiner Welt:",
+    shortList: [
+      "Versionen von Foundry, System und Modulen",
+      "welche Funktionen wie oft genutzt werden",
+      "Fehlerstellen im Modulcode"
+    ],
+    detailsLabel: "Alle Angaben anzeigen",
     sentList: [
       "Foundry-Version, Spielsystem mit Version und Sprache der Welt",
       "Ob die Welt auf The Forge läuft und welche Browser-Familie die SL verwendet (Chrome/Edge, Firefox, Safari oder Foundry-App)",
@@ -829,15 +836,13 @@ const TEXT = {
       "Eine zufällig erzeugte, gleichbleibende Welt-ID, um Berichte derselben Welt zuzuordnen und auf Wunsch löschen zu können"
     ],
     notSent: "Nicht gesendet werden Namen von Welten, Spielern, Szenen, Akteuren oder eigenen Dateien, Chats, Notizen, Würfelergebnisse, Spielerzahlen oder die Serveradresse. Die IP-Adresse wird beim Empfang technisch übermittelt, aber nicht gespeichert.",
-    askScope: "Deine Entscheidung gilt für alle Sephral’s Module dieser Welt und kann jederzeit in den Moduleinstellungen geändert werden.",
+    askScope: "Gilt für alle Sephral’s Module dieser Welt und lässt sich jederzeit in den Einstellungen ändern.",
     renewal: "Der Nutzungsbericht enthält jetzt zusätzliche Angaben. Bitte entscheide erneut, ob du ihn teilen möchtest.",
-    privacy: "Datenschutzhinweis",
     yes: "Ja, senden",
     no: "Nein, danke",
     statusOn: "Die Nutzungsstatistik ist für diese Welt aktiviert.",
     statusOff: "Die Nutzungsstatistik ist für diese Welt deaktiviert.",
     optout_module: "Das Senden von Nutzungsdaten ist auf diesem Server deaktiviert.",
-    optout_host: "Das Senden von Nutzungsdaten ist auf diesem Server deaktiviert.",
     optout_browser: "Das Senden von Nutzungsdaten ist in diesem Browser deaktiviert.",
     worldId: "Welt-ID für Löschanfragen:",
     preview: "Vorschau des Nutzungsberichts",
