@@ -136,7 +136,7 @@
   "SIPD.Error.NoActor": "Wähle zuerst einen Token aus oder weise dir einen Charakter zu.",
   "SIPD.Error.UnsupportedAction": "Diese Zwischenablage-Aktion wird nicht unterstützt.",
   "SIPD.Dialog.Settings": "Einstellungen",
-  "SIPD.SelfTest.Title": "Image Paste & Drop Selbsttest",
+  "SIPD.SelfTest.Title": "Selbsttest von Image Paste & Drop",
   "SIPD.SelfTest.Run": "Selbsttest starten",
   "SIPD.SelfTest.Hint": "Prüft die Dateiauswahl, den Speicherordner, die Ziele, WebP und das Hochladerecht der Spieler. Nach jedem Update von Foundry ausführen.",
   "SIPD.SelfTest.Passed": "Selbsttest bestanden: {checks} Prüfungen.",
@@ -147,6 +147,6 @@
   "SIPD.SelfTest.Storage": "Der Speicherordner {folder} ließ sich nicht anlegen.",
   "SIPD.SelfTest.Targets": "Szenen, Kacheln, Journale oder das Bildfenster fehlen.",
   "SIPD.SelfTest.Texts": "Die Texte des Moduls fehlen.",
-  "SIPD.SelfTest.Webp": "Dieser Browser kann keine WebP Bilder erstellen. Schalte die WebP Umwandlung aus oder nutze einen anderen Browser.",
+  "SIPD.SelfTest.Webp": "Dieser Browser kann keine WebP-Bilder erstellen. Schalte die WebP-Umwandlung aus oder nutze einen anderen Browser.",
   "SIPD.SelfTest.PlayerUpload": "Spieler dürfen das Werkzeug nutzen, aber keine Spielerrolle darf Dateien hochladen. Erlaube das Hochladen in Foundrys Berechtigungen."
 }
