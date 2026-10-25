@@ -141,6 +141,19 @@ The gear in the title bar of the import window closes it and opens these setting
 
 *Run self test* (GM) checks the file picker, the storage folder, the targets, WebP in your browser and whether players may upload files. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once.
 
+## Usage statistics
+
+The module can take part in a small usage report shared by all of Sephral’s modules. Nothing is counted or sent until the GM agrees: shortly after the world starts, the active GM is asked, and the question comes back at every start until there is an answer. The answer counts for all of Sephral’s modules in the world. *Share usage statistics* in the module settings turns the report on or off at any time, and *Manage statistics* below it shows what the report contains right now.
+
+With the GM’s consent only the active GM’s browser counts, and it sends at most one report a day. The question lists everything the report contains, from the Foundry version to a random world ID. For Image Paste & Drop it holds:
+
+* on how many of the last 30 days the module was used
+* how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, or are shown to the players or posted in the chat
+* the settings *Dialog theme*, *Allow players to use SIPD* and *Save uploads as WebP* (only the chosen option)
+* where errors occur in the module code: file, line and error type, never the error message
+
+No names, chat messages, notes, dice results or other content of the world are sent.
+
 ## Macros
 
 `game.modules.get("sephrals-image-paste-drop").api.runSelfTest()` runs the self test (GM).

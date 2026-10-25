@@ -14,7 +14,7 @@
 /* -------------------------------------------- */
 
 /** Version of this file. Raise it with every change; the newest copy in a world runs for all modules. */
-export const LIB_VERSION = 2;
+export const LIB_VERSION = 3;
 
 /** Version of the ping format ("v"). Raise it only for breaking changes; the server keeps a parser per version. */
 export const FORMAT_VERSION = 1;
@@ -26,10 +26,10 @@ export const CONSENT_VERSION = 1;
 const STATE_VERSION = 1;
 
 /**
- * Whether this copy may run at all. Shipped switched off until the author switches it on: then nothing
- * is shown, asked, counted or sent. A later copy with ACTIVE true serves the modules of switched-off copies too.
+ * Whether this copy may run at all. Switched off, nothing is shown, asked, counted or sent. Libraries 1 and 2 shipped
+ * switched off; a switched-on copy serves the modules of switched-off copies too.
  */
-const ACTIVE = false;
+const ACTIVE = true;
 
 /* -------------------------------------------- */
 /*  Configuration                               */
@@ -388,7 +388,7 @@ async function question(renewal) {
 async function decide(reg, answer) {
   const consent = readConsent(reg);
   const next = {answer, version: CONSENT_VERSION, decidedAt: Date.now(), asked: consent.asked ?? 0,
-    id: answer === "yes" ? (consent.id ?? crypto.randomUUID()) : null};
+    id: answer === "yes" ? (consent.id ?? randomId()) : null};
   await writeConsent(reg, next);
   if ( answer !== "yes" ) return stopRecording();
   if ( !game.user?.isActiveGM || optOutReason() ) return;
@@ -701,6 +701,16 @@ function saveState() {
 /*  Helpers                                     */
 /* -------------------------------------------- */
 
+/** A random UUID v4. crypto.randomUUID only exists on HTTPS pages, many Foundry servers run on plain HTTP. */
+function randomId() {
+  if ( typeof globalThis.crypto?.randomUUID === "function" ) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -861,4 +871,5 @@ function text(key) {
 
 /** Pure helpers and internals for the shared tests. Not part of the module API. */
 export const __test__ = {TIMING, registry, run, consentAction, readConsent, optOutReason, start, sendPing, decide,
-  ask, count, decorateSettings, LIBRARY, stateKey, loadState, emptyState, TEXT, ENDPOINT, OPTOUT_MODULE, INTEGRATIONS};
+  ask, count, decorateSettings, LIBRARY, stateKey, loadState, emptyState, TEXT, ENDPOINT, OPTOUT_MODULE, INTEGRATIONS,
+  randomId};
