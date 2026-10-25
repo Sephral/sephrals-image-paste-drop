@@ -8,11 +8,23 @@ import {
   summarizeOptimizationPlans
 } from "./image-optimize.js";
 import {
+  DEFAULT_GRID_SIZE,
+  GRID_MIN_SIZE,
+  countSquares,
+  detectGridFromFileName,
+  fitSceneToGrid,
+  normalizeGridChoice,
+  sizeForColumns
+} from "./scene-grid.js";
+import {sha256Hex} from "./sha256.js";
+import {
+  VIDEO_FILE_EXTENSIONS,
   batchItemName,
   buildChatImageContent,
   clampPointToRect,
   clampSpan,
   imagePostMode,
+  isVideoPath,
   layoutTileGrid,
   normalizeRecipientIds,
   parseImageUrlList,
@@ -138,7 +150,48 @@ const TARGET_USAGE_FEATURES = Object.freeze({
   [ACTIONS.CHAT_IMAGE]: "showToPlayers",
   [ACTIONS.SHARE_IMAGE]: "showToPlayers"
 });
+// Actor portraits only take images. Foundry draws scenes, tiles and tokens from a video as well.
+const IMAGE_ONLY_ACTIONS = Object.freeze([ACTIONS.ACTOR_PORTRAIT]);
 const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
+const MEDIA_URL_EXTENSIONS = Object.freeze([...IMAGE_URL_EXTENSIONS, ...VIDEO_FILE_EXTENSIONS]);
+// The video formats Foundry plays, with the extension an upload gets
+const VIDEO_MIME_TYPES = Object.freeze({
+  "video/webm": "webm",
+  "video/mp4": "mp4",
+  "video/x-m4v": "m4v",
+  "video/ogg": "ogv"
+});
+const MEDIA_TYPES_BY_EXTENSION = Object.freeze({
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+  png: "image/png",
+  webm: "video/webm",
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  ogv: "video/ogg"
+});
+// CONST.GRID_TYPES and the labels of Foundry's scene configuration
+const GRID_TYPE_LABELS = Object.freeze({
+  GRIDLESS: "SCENE.GridGridless",
+  SQUARE: "SCENE.GridSquare",
+  HEXODDR: "SCENE.GridHexOddR",
+  HEXEVENR: "SCENE.GridHexEvenR",
+  HEXODDQ: "SCENE.GridHexOddQ",
+  HEXEVENQ: "SCENE.GridHexEvenQ"
+});
+const FALLBACK_GRID_TYPES = Object.freeze({GRIDLESS: 0, SQUARE: 1, HEXODDR: 2, HEXEVENR: 3, HEXODDQ: 4, HEXEVENQ: 5});
+// Shortcuts that skip the dialog: the target the dialog would preselect, or showing the image to the players
+const QUICK_TARGETS = Object.freeze({
+  DEFAULT: "default",
+  SHARE: "share"
+});
+// Without clipboard access a shortcut waits this long for the next paste or drop
+const QUICK_ARM_DURATION = 10000;
+let ARMED_QUICK_TARGET = null;
 // Players cannot create directories, so their uploads go into folders a GM client prepares.
 const PLAYER_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/players`;
 const SHARED_UPLOAD_DIRECTORY = `${STORAGE_ROOT}/shared`;
@@ -469,8 +522,28 @@ Hooks.once("init", () => {
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING]
   });
 
+  registerQuickKeybindings();
   Hooks.on("renderChatMessageHTML", onRenderChatMessage);
 });
+
+// Both shortcuts can be changed under Configure Controls. Alt+Shift is left out, Windows switches the keyboard
+// layout with it.
+function registerQuickKeybindings() {
+  const keybindings = game.keybindings;
+  if ( typeof keybindings?.register !== "function" ) return;
+  keybindings.register(MODULE_ID, "quickInsert", {
+    name: localize("SIPD.Keybindings.QuickInsert.Name"),
+    hint: localize("SIPD.Keybindings.QuickInsert.Hint"),
+    editable: [{key: "KeyV", modifiers: ["Alt"]}],
+    onDown: () => onQuickInsertKey(QUICK_TARGETS.DEFAULT)
+  });
+  keybindings.register(MODULE_ID, "quickShare", {
+    name: localize("SIPD.Keybindings.QuickShare.Name"),
+    hint: localize("SIPD.Keybindings.QuickShare.Hint"),
+    editable: [{key: "KeyP", modifiers: ["Alt"]}],
+    onDown: () => onQuickInsertKey(QUICK_TARGETS.SHARE)
+  });
+}
 
 function getMaxImageSizeChoices() {
   return Object.fromEntries(MAX_IMAGE_SIZE_CHOICES.map(size => [
@@ -482,8 +555,9 @@ function getMaxImageSizeChoices() {
 // Images posted to chat open in a popout on click, like images in journal pages.
 function onRenderChatMessage(_message, html) {
   const element = html instanceof HTMLElement ? html : html?.[0];
-  for ( const image of element?.querySelectorAll?.(".sipd-chat-images img") ?? [] ) {
-    image.addEventListener("click", () => openImagePreview(image.getAttribute("src"), image.getAttribute("alt") || ""));
+  for ( const image of element?.querySelectorAll?.(".sipd-chat-images img, .sipd-chat-images video") ?? [] ) {
+    const name = image.getAttribute("alt") || image.getAttribute("aria-label") || "";
+    image.addEventListener("click", () => openImagePreview(image.getAttribute("src"), name));
   }
 }
 
@@ -498,7 +572,8 @@ Hooks.once("ready", () => {
 });
 
 async function onPaste(event) {
-  if ( !game.settings.get(MODULE_ID, ENABLE_PASTE_SETTING) ) return;
+  // A shortcut waiting for this paste works without the paste setting, it was pressed on purpose
+  if ( !game.settings.get(MODULE_ID, ENABLE_PASTE_SETTING) && !hasArmedQuickTarget() ) return;
   if ( isEditableTarget(event.target) ) return;
   if ( !canCurrentUserUseTool() ) return;
 
@@ -514,10 +589,11 @@ async function onPaste(event) {
   event.preventDefault();
   event.stopPropagation();
   countFeature(MODULE_ID, "imagePaste");
+  const quickTarget = takeArmedQuickTarget();
 
   try {
-    if ( batch.length > 1 ) await importImageBatch(batch);
-    else await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl));
+    if ( batch.length > 1 ) await importImageBatch(batch, {quickTarget});
+    else await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl), {quickTarget});
   } catch (error) {
     console.error(`${MODULE_ID} | Paste handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -525,8 +601,8 @@ async function onPaste(event) {
 }
 
 function onDragOver(event) {
-  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) ) return;
-  if ( isEditableTarget(event.target) ) return;
+  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) && !hasArmedQuickTarget() ) return;
+  if ( isEditableTarget(event.target) || isFoundryDropZone(event.target) ) return;
   if ( !canCurrentUserUseTool() ) return;
   if ( !hasTransferableImage(event.dataTransfer) ) return;
 
@@ -535,8 +611,9 @@ function onDragOver(event) {
 }
 
 async function onDrop(event) {
-  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) ) return;
-  if ( isEditableTarget(event.target) ) return;
+  // Like a paste, a drop a shortcut waits for works without the drop setting
+  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) && !hasArmedQuickTarget() ) return;
+  if ( isEditableTarget(event.target) || isFoundryDropZone(event.target) ) return;
   if ( !canCurrentUserUseTool() ) return;
   if ( !hasTransferableImage(event.dataTransfer) ) return;
 
@@ -548,18 +625,24 @@ async function onDrop(event) {
   event.preventDefault();
   event.stopPropagation();
   countFeature(MODULE_ID, "imageDrop");
+  const quickTarget = takeArmedQuickTarget();
 
   // Tiles from a drop onto the canvas go where the image was dropped
   const dropPoint = getCanvasDropPoint(event);
   const droppedUrls = droppedFiles.length ? [] : extractDroppedImageUrls(event.dataTransfer);
   const batch = droppedFiles.length > 1 ? droppedFiles : droppedUrls;
   try {
-    if ( batch.length > 1 ) await importImageBatch(batch, {dropPoint});
-    else await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint});
+    if ( batch.length > 1 ) await importImageBatch(batch, {dropPoint, quickTarget});
+    else await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint, quickTarget});
   } catch (error) {
     console.error(`${MODULE_ID} | Drop handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
   }
+}
+
+// Foundry's file browser uploads files dropped onto its file list into the browsed folder itself
+function isFoundryDropZone(target) {
+  return (target instanceof HTMLElement) && Boolean(target.closest("section[data-files]"));
 }
 
 function isEditableTarget(target) {
@@ -584,17 +667,35 @@ function extractClipboardImages(event) {
   return collectImageFiles(event.clipboardData);
 }
 
-// Image files of a clipboard or drop, from its items or else from its file list.
+// Image and video files of a clipboard or drop, from its items or else from its file list.
 function collectImageFiles(transfer) {
   const files = [];
   for ( const item of Array.from(transfer?.items ?? []) ) {
     if ( item.kind !== "file" ) continue;
-    if ( !item.type?.startsWith("image/") ) continue;
+    if ( !isSupportedMediaType(item.type) ) continue;
     const file = item.getAsFile();
     if ( file ) files.push(file);
   }
   if ( files.length ) return files;
-  return Array.from(transfer?.files ?? []).filter(file => file.type?.startsWith("image/"));
+  return Array.from(transfer?.files ?? []).filter(file => isSupportedMediaType(file.type));
+}
+
+// "video/mp4; codecs=avc1" counts as video/mp4
+function baseMediaType(type) {
+  return String(type ?? "").split(";")[0].trim().toLowerCase();
+}
+
+function isVideoType(type) {
+  return Object.hasOwn(VIDEO_MIME_TYPES, baseMediaType(type));
+}
+
+// Images of any kind and the videos Foundry plays (WebM, MP4, OGV)
+function isSupportedMediaType(type) {
+  return baseMediaType(type).startsWith("image/") || isVideoType(type);
+}
+
+function isVideoFile(file) {
+  return isVideoType(file?.type);
 }
 
 // Copied image links arrive as plain text. Only a single image URL counts, any other text is left alone.
@@ -619,17 +720,17 @@ function parseImageUrl(text) {
     return null;
   }
   if ( !["http:", "https:"].includes(url.protocol) ) return null;
-  return IMAGE_URL_EXTENSIONS.includes(getFileExtension(url.pathname)) ? url.href : null;
+  return MEDIA_URL_EXTENSIONS.includes(getFileExtension(url.pathname)) ? url.href : null;
 }
 
 function hasTransferableImage(dataTransfer) {
   if ( !dataTransfer ) return false;
 
   const files = Array.from(dataTransfer.files ?? []);
-  if ( files.some(file => file.type?.startsWith("image/")) ) return true;
+  if ( files.some(file => isSupportedMediaType(file.type)) ) return true;
 
   const items = Array.from(dataTransfer.items ?? []);
-  if ( items.some(item => item.kind === "file" && item.type?.startsWith("image/")) ) return true;
+  if ( items.some(item => item.kind === "file" && isSupportedMediaType(item.type)) ) return true;
 
   const types = Array.from(dataTransfer.types ?? []);
   return types.includes("text/uri-list") || types.includes("text/html");
@@ -639,13 +740,13 @@ async function extractDroppedImage(dataTransfer) {
   const items = Array.from(dataTransfer?.items ?? []);
   for ( const item of items ) {
     if ( item.kind !== "file" ) continue;
-    if ( !item.type.startsWith("image/") ) continue;
+    if ( !isSupportedMediaType(item.type) ) continue;
     const file = item.getAsFile();
     if ( file ) return file;
   }
 
   const files = Array.from(dataTransfer?.files ?? []);
-  const imageFile = files.find(file => file.type?.startsWith("image/"));
+  const imageFile = files.find(file => isSupportedMediaType(file.type));
   if ( imageFile ) return imageFile;
 
   const uri = getDroppedUri(dataTransfer);
@@ -690,8 +791,9 @@ async function fetchDroppedImage(rawUri) {
   }
 
   const blob = await response.blob();
-  const mimeType = blob.type || guessMimeTypeFromUri(uri);
-  if ( !mimeType?.startsWith("image/") ) return null;
+  // Servers that send a generic type (application/octet-stream) still get the type of the link's extension
+  const mimeType = isSupportedMediaType(blob.type) ? baseMediaType(blob.type) : guessMimeTypeFromUri(uri);
+  if ( !isSupportedMediaType(mimeType) ) return null;
 
   const extension = extensionForMimeType(mimeType);
   const fileName = fileNameFromUri(uri, extension);
@@ -705,15 +807,13 @@ function createFetchFailedError(uri) {
   return error;
 }
 
+// By the extension of the path, so links with a query such as "map.png?width=800" count as well
 function guessMimeTypeFromUri(uri) {
-  const normalized = uri.toLowerCase();
-  if ( normalized.endsWith(".jpg") || normalized.endsWith(".jpeg") ) return "image/jpeg";
-  if ( normalized.endsWith(".gif") ) return "image/gif";
-  if ( normalized.endsWith(".webp") ) return "image/webp";
-  if ( normalized.endsWith(".svg") ) return "image/svg+xml";
-  if ( normalized.endsWith(".avif") ) return "image/avif";
-  if ( normalized.endsWith(".png") ) return "image/png";
-  return "";
+  let path = String(uri ?? "");
+  try {
+    path = new URL(path).pathname;
+  } catch (_error) {}
+  return MEDIA_TYPES_BY_EXTENSION[getFileExtension(path)] ?? "";
 }
 
 function fileNameFromUri(uri, fallbackExtension) {
@@ -783,15 +883,26 @@ async function importImage(loadImage, options={}) {
   if ( file ) await handleImportedImage(file, options);
 }
 
-async function handleImportedImage(file, {dropPoint=null}={}) {
+async function handleImportedImage(file, {dropPoint=null, quickTarget=null}={}) {
   const preparedFile = prepareClipboardFile(file);
+  const video = isVideoFile(preparedFile);
   const objectUrl = URL.createObjectURL(preparedFile);
   let releaseObjectUrl = true;
 
   try {
-    const dimensions = await readImageDimensions(objectUrl);
-    const optimizePlan = await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
-    const decision = await promptForImportDecision({previewUrl: objectUrl, ...dimensions, optimizePlan, sourceType: preparedFile.type});
+    const dimensions = await readMediaDimensions(objectUrl, {video});
+    const optimizePlan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
+    // The original name, a copied link or a file such as "Tavern 30x20.webp" may name the grid of a new scene
+    const grid = detectGridFromFileName(file.name, dimensions);
+    const decision = await resolveImportDecision({
+      quickTarget,
+      previewUrl: objectUrl,
+      ...dimensions,
+      optimizePlan,
+      sourceType: preparedFile.type,
+      video,
+      grid
+    });
     if ( !decision ) return;
 
     if ( game.user?.isGM && actionUsesSelectableUploadDirectory(decision.action) ) {
@@ -810,11 +921,14 @@ async function handleImportedImage(file, {dropPoint=null}={}) {
 
     if ( path === objectUrl ) releaseObjectUrl = false;
 
+    const layout = fitSceneToGrid(decision.grid, dimensions, upload);
     await executeAction({
       ...getDecisionOptions(decision),
       path,
-      width: upload.width,
-      height: upload.height,
+      width: layout.width,
+      height: layout.height,
+      grid: layout.grid,
+      video,
       temporaryObjectUrl: path === objectUrl ? objectUrl : null,
       dropPoint
     });
@@ -832,8 +946,145 @@ function getDecisionOptions(decision) {
     navigation: decision.navigation,
     recipients: decision.recipients ?? [],
     prototypeToken: Boolean(decision.prototypeToken),
-    chatMode: decision.chatMode ?? CHAT_MODES.CURRENT
+    chatMode: decision.chatMode ?? CHAT_MODES.CURRENT,
+    grid: decision.grid ?? null
   };
+}
+
+// The dialog, or the target of a shortcut when that target is possible right now.
+async function resolveImportDecision({quickTarget=null, ...prompt}) {
+  if ( quickTarget ) {
+    const decision = buildQuickDecision(quickTarget, prompt);
+    if ( decision ) return decision;
+    ui.notifications.warn(localize("SIPD.Quick.Unavailable", {target: getQuickTargetLabel(quickTarget)}));
+  }
+  return promptForImportDecision(prompt);
+}
+
+// The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
+// is not possible right now, for example a token target without a selected token.
+function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=null}={}) {
+  const action = getQuickAction(quickTarget, {remoteUrl, video});
+  const choice = getActionChoices({remoteUrl, video}).find(entry => entry.value === action);
+  if ( !choice || choice.disabled ) return null;
+
+  const defaults = getDialogDefaults({remoteUrl, video});
+  return normalizeActionDecision({
+    name: defaultDocumentName(),
+    action,
+    uploadDirectory: defaults.uploadDirectory,
+    shareToPlayers: defaults.shareToPlayers,
+    activateScene: defaults.activateScene,
+    navigation: defaults.navigation,
+    recipients: [],
+    prototypeToken: true,
+    chatMode: CHAT_MODES.CURRENT,
+    optimize: true,
+    grid: grid ? {type: getDefaultGridType(), size: grid.size, columns: grid.columns} : null
+  }, {remoteUrl, video});
+}
+
+// The target the dialog would preselect. A remembered target the user may not use at all (a player's default) gives
+// way like in the dialog, one the user may use but not right now (no selected token) stays, so nothing else happens.
+function getQuickAction(quickTarget, {remoteUrl=false, video=false}={}) {
+  if ( quickTarget === QUICK_TARGETS.SHARE ) return ACTIONS.SHARE_IMAGE;
+  const preferred = getPreferredAction();
+  if ( getActionChoices({remoteUrl, video}).some(choice => choice.value === preferred) ) return preferred;
+  return getDialogDefaults({remoteUrl, video}).action;
+}
+
+function getQuickTargetLabel(quickTarget) {
+  const action = getQuickAction(quickTarget);
+  return getAllActionChoices().find(choice => choice.value === action)?.label ?? action;
+}
+
+// A shortcut reads the clipboard itself. When the browser does not allow that (plain HTTP, a refused
+// permission, copied files) or finds nothing, the next paste or drop within a few seconds goes to the target.
+function onQuickInsertKey(quickTarget) {
+  if ( !canCurrentUserUseTool() ) return false;
+  void quickInsertFromClipboard(quickTarget).catch(error => {
+    console.error(`${MODULE_ID} | Shortcut import failed`, error);
+    ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
+  });
+  return true;
+}
+
+// The target waits already while the clipboard is read: a paste during a permission prompt or Firefox's paste button
+// takes it, and the read then imports nothing a second time.
+async function quickInsertFromClipboard(quickTarget) {
+  const waiting = {target: quickTarget, until: Date.now() + QUICK_ARM_DURATION};
+  ARMED_QUICK_TARGET = waiting;
+  const sources = await readClipboardSources();
+  if ( ARMED_QUICK_TARGET !== waiting ) return;
+  if ( !sources?.length ) {
+    armQuickTarget(quickTarget);
+    return;
+  }
+  ARMED_QUICK_TARGET = null;
+  countFeature(MODULE_ID, "imagePaste");
+  await importSources(sources, {quickTarget});
+}
+
+// Images, videos or image links on the clipboard, read through the Clipboard API. Null without access or when the
+// browser fails to hand out the content, then the next paste gets the target.
+async function readClipboardSources() {
+  const clipboard = globalThis.navigator?.clipboard;
+  if ( !globalThis.isSecureContext || (typeof clipboard?.read !== "function") ) return null;
+
+  const files = [];
+  let text = "";
+  try {
+    for ( const item of (await clipboard.read()) ?? [] ) {
+      const types = Array.from(item.types ?? []);
+      const type = types.find(entry => isSupportedMediaType(entry));
+      const itemText = types.includes("text/plain") ? await (await item.getType("text/plain")).text() : "";
+      // A file copied in the file manager comes with its name and an icon. The paste event gets the file itself.
+      if ( type && isCopiedFileName(itemText) ) return [];
+      if ( type ) {
+        const blob = await item.getType(type);
+        files.push(new File([blob], `image.${extensionForMimeType(type)}`, {type, lastModified: Date.now()}));
+      }
+      else if ( !text ) text = itemText;
+    }
+  } catch (_error) {
+    return null;
+  }
+  if ( files.length ) return files;
+
+  const urls = parseImageUrlList(text, parseImageUrl);
+  if ( urls.length ) return urls;
+  const url = parseImageUrl(text);
+  return url ? [url] : [];
+}
+
+// A single file name with an image or video extension, no link
+function isCopiedFileName(text) {
+  const value = String(text ?? "").trim();
+  if ( !value || /[\r\n]/.test(value) || /^(https?|data):/i.test(value) ) return false;
+  return MEDIA_URL_EXTENSIONS.includes(getFileExtension(value.split(/[\\/]/).at(-1)));
+}
+
+// One image (a file or a link) or several of them
+async function importSources(sources, options={}) {
+  if ( sources.length > 1 ) return importImageBatch(sources, options);
+  const [source] = sources;
+  return importImage(async () => (typeof source === "string") ? fetchDroppedImage(source) : source, options);
+}
+
+function armQuickTarget(quickTarget) {
+  ARMED_QUICK_TARGET = {target: quickTarget, until: Date.now() + QUICK_ARM_DURATION};
+  ui.notifications.info(localize("SIPD.Quick.Armed", {target: getQuickTargetLabel(quickTarget)}));
+}
+
+function hasArmedQuickTarget() {
+  return Boolean(ARMED_QUICK_TARGET && (ARMED_QUICK_TARGET.until >= Date.now()));
+}
+
+// The waiting target applies to one paste or drop only
+function takeArmedQuickTarget() {
+  const target = hasArmedQuickTarget() ? ARMED_QUICK_TARGET.target : null;
+  ARMED_QUICK_TARGET = null;
+  return target;
 }
 
 function getImageOptimizationOptions() {
@@ -847,7 +1098,8 @@ function getImageOptimizationOptions() {
 // The file that gets uploaded, shrunk or converted when the settings ask for it and the import did not opt out.
 async function prepareUploadFile(file, dimensions, {optimize=true}={}) {
   const options = resolveOptimizationOptions(getImageOptimizationOptions(), optimize);
-  if ( !hasOptimizationOptions(options) ) return {file, ...dimensions};
+  // Videos are uploaded as they are
+  if ( isVideoFile(file) || !hasOptimizationOptions(options) ) return {file, ...dimensions};
   const result = await optimizeImageFile(file, dimensions, options);
   return {file: result.file, width: result.width, height: result.height};
 }
@@ -876,18 +1128,20 @@ async function importImageBatch(sources, options={}) {
   return handleImportedBatch(files, options);
 }
 
-async function handleImportedBatch(files, {dropPoint=null}={}) {
+async function handleImportedBatch(files, {dropPoint=null, quickTarget=null}={}) {
   const items = [];
   let skipped = 0;
 
   try {
     for ( const [index, file] of files.entries() ) {
       const preparedFile = prepareClipboardFile(file);
+      const video = isVideoFile(preparedFile);
       const objectUrl = URL.createObjectURL(preparedFile);
       try {
-        const dimensions = await readImageDimensions(objectUrl);
-        const plan = await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
-        items.push({file: preparedFile, objectUrl, sourceName: file.name, index, plan, ...dimensions});
+        const dimensions = await readMediaDimensions(objectUrl, {video});
+        const plan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
+        const grid = detectGridFromFileName(file.name, dimensions);
+        items.push({file: preparedFile, original: file, objectUrl, sourceName: file.name, index, plan, video, grid, ...dimensions});
       } catch (_error) {
         URL.revokeObjectURL(objectUrl);
         skipped += 1;
@@ -895,8 +1149,9 @@ async function handleImportedBatch(files, {dropPoint=null}={}) {
     }
     if ( skipped ) ui.notifications.warn(localize("SIPD.Notification.BatchSkipped", {count: skipped}));
     if ( !items.length ) throw new Error(localize("SIPD.Error.DimensionRead"));
-    // Only one readable image left: it gets the normal dialog with every single-image target
-    if ( items.length === 1 ) return handleImportedImage(items[0].file, {dropPoint});
+    // Only one readable image left: it gets the normal dialog with every single-image target. The original file keeps
+    // its name for the grid.
+    if ( items.length === 1 ) return handleImportedImage(items[0].original, {dropPoint, quickTarget});
 
     const choices = getBatchActionChoices();
     if ( !choices.some(choice => !choice.disabled) ) {
@@ -916,13 +1171,18 @@ async function handleImportedBatch(files, {dropPoint=null}={}) {
 
     ui.notifications.info(localize("SIPD.Notification.BatchUploading", {count: items.length}));
     const results = [];
+    // A new scene per image takes the grid each file name names
+    const sceneGrids = decision.action === ACTIONS.SCENE_BACKGROUND;
     for ( const [position, item] of items.entries() ) {
       const upload = await prepareUploadFile(item.file, {width: item.width, height: item.height}, {optimize: decision.optimize});
       const path = await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory});
+      const grid = (sceneGrids && item.grid) ? {type: getDefaultGridType(), size: item.grid.size, columns: item.grid.columns} : null;
+      const layout = fitSceneToGrid(grid, item, upload);
       results.push({
         path,
-        width: upload.width,
-        height: upload.height,
+        width: layout.width,
+        height: layout.height,
+        grid: layout.grid,
         name: batchItemName(decision.name, item.sourceName, position)
       });
     }
@@ -936,16 +1196,17 @@ async function handleImportedBatch(files, {dropPoint=null}={}) {
 }
 
 // Uses an image URL the browser could not download as it is, without uploading a copy.
-async function handleRemoteImageUrl(url, {dropPoint=null}={}) {
+async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null}={}) {
+  const video = isVideoPath(url);
   let dimensions;
   try {
-    dimensions = await readImageDimensions(url);
+    dimensions = await readMediaDimensions(url, {video});
   } catch (_error) {
     throw new Error(localize("SIPD.Error.DropFetchFailed"));
   }
   if ( !(await confirmRemoteImageUrl(url)) ) return;
 
-  const decision = await promptForImportDecision({previewUrl: url, ...dimensions, remoteUrl: true});
+  const decision = await resolveImportDecision({quickTarget, previewUrl: url, ...dimensions, remoteUrl: true, video});
   if ( !decision ) return;
 
   await executeAction({
@@ -953,6 +1214,7 @@ async function handleRemoteImageUrl(url, {dropPoint=null}={}) {
     path: url,
     width: dimensions.width,
     height: dimensions.height,
+    video,
     temporaryObjectUrl: null,
     dropPoint
   });
@@ -1007,7 +1269,8 @@ function getUrlHostLabel(url) {
   return String(url ?? "").slice(0, 60);
 }
 
-async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null}) {
+async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
+  video=false, grid=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
@@ -1015,8 +1278,10 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
     height,
     remoteUrl,
     optimizePlan,
-    sourceType
-  }), {remoteUrl});
+    sourceType,
+    video,
+    grid
+  }), {remoteUrl, video});
   if ( !decision ) return null;
 
   if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) ) {
@@ -1029,10 +1294,11 @@ function requiresPersistentPath(action, shareToPlayers) {
   return shareToPlayers || (action !== ACTIONS.PREVIEW_ONLY);
 }
 
-function normalizeActionDecision(decision, {remoteUrl=false}={}) {
-  if ( !decision ) return null;
+// DialogV2 answers a button without callback with its action name, so Cancel arrives as the text "cancel".
+function normalizeActionDecision(decision, {remoteUrl=false, video=false}={}) {
+  if ( !decision || (typeof decision !== "object") ) return null;
 
-  const allowedActions = new Set(getPermittedActions().filter(action => !remoteUrl || REMOTE_URL_ACTIONS.includes(action)));
+  const allowedActions = new Set(getPermittedActions().filter(action => isActionForMedia(action, {remoteUrl, video})));
   const action = allowedActions.has(decision.action) ? decision.action : ACTIONS.PREVIEW_ONLY;
   const behavior = getActionBehavior(action);
   const shareToPlayers = behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers);
@@ -1048,8 +1314,36 @@ function normalizeActionDecision(decision, {remoteUrl=false}={}) {
     recipients: sharing ? normalizeRecipientIds(decision.recipients, getAllUserIds()) : [],
     prototypeToken: behavior.supportsPrototypeToken && Boolean(decision.prototypeToken),
     chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
-    optimize: readOptimizeChoice(decision)
+    optimize: readOptimizeChoice(decision),
+    grid: behavior.supportsGrid ? normalizeGridChoice(decision.grid, {types: getGridTypeValues(), defaultType: getDefaultGridType()}) : null
   };
+}
+
+// A linked image only reaches targets that show it in HTML, a video every target but the portrait.
+function isActionForMedia(action, {remoteUrl=false, video=false}={}) {
+  if ( remoteUrl && !REMOTE_URL_ACTIONS.includes(action) ) return false;
+  return !(video && IMAGE_ONLY_ACTIONS.includes(action));
+}
+
+function getGridTypes() {
+  return globalThis.CONST?.GRID_TYPES ?? FALLBACK_GRID_TYPES;
+}
+
+function getGridTypeValues() {
+  return Object.values(getGridTypes());
+}
+
+// The system decides the grid type of a new scene, like in Foundry's own scene creation
+function getDefaultGridType() {
+  const type = Number(game.system?.grid?.type);
+  return getGridTypeValues().includes(type) ? type : getGridTypes().SQUARE;
+}
+
+function getGridTypeChoices() {
+  const types = getGridTypes();
+  return Object.entries(GRID_TYPE_LABELS)
+    .filter(([key]) => key in types)
+    .map(([key, label]) => ({value: types[key], label: localize(label)}));
 }
 
 // Only an unchecked "save optimized" box turns optimizing off. Without the box the settings apply.
@@ -1166,8 +1460,11 @@ function getUploadDirectoryChoices(preferredDirectory=null) {
   ].filter(Boolean)));
 }
 
+// crypto.subtle only exists in secure contexts. Foundry over plain HTTP from another address, as on many self-hosted
+// servers, hashes with the script version and gets the same file names.
 async function hashFileContent(file) {
   const buffer = await file.arrayBuffer();
+  if ( typeof globalThis.crypto?.subtle?.digest !== "function" ) return sha256Hex(buffer);
   const digest = await crypto.subtle.digest("SHA-256", buffer);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -1195,7 +1492,7 @@ function prepareClipboardFile(file) {
   const baseName = slugify(originalName || uniqueDocumentName());
   const fileName = `${baseName || "clipboard-image"}.${extension}`;
   return new File([file], fileName, {
-    type: file.type || `image/${extension}`,
+    type: file.type || MEDIA_TYPES_BY_EXTENSION[extension] || `image/${extension}`,
     lastModified: Date.now()
   });
 }
@@ -1213,7 +1510,7 @@ function extensionForMimeType(mimeType) {
     case "image/avif":
       return "avif";
     default:
-      return "png";
+      return VIDEO_MIME_TYPES[String(mimeType ?? "").toLowerCase()] ?? "png";
   }
 }
 
@@ -1243,10 +1540,44 @@ async function readImageDimensions(src) {
   });
 }
 
-async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null}) {
-  const defaults = getDialogDefaults({remoteUrl});
+function readMediaDimensions(src, {video=false}={}) {
+  return video ? readVideoDimensions(src) : readImageDimensions(src);
+}
+
+// Only the metadata is loaded. A file without a picture (audio in a WebM container) has no size and is refused.
+async function readVideoDimensions(src) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    const finish = (result, error) => {
+      video.onloadedmetadata = video.onerror = null;
+      video.removeAttribute?.("src");
+      video.load?.();
+      if ( result ) resolve(result);
+      else reject(error);
+    };
+    video.muted = true;
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if ( (width > 0) && (height > 0) ) finish({width, height});
+      else finish(null, new Error(localize("SIPD.Error.DimensionRead")));
+    };
+    video.onerror = () => finish(null, new Error(localize("SIPD.Error.DimensionRead")));
+    video.src = src;
+  });
+}
+
+async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
+  video=false, grid=null}) {
+  const defaults = getDialogDefaults({remoteUrl, video});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
+  const previewBadge = remoteUrl ? "SIPD.Dialog.PreviewBadgeLinked" : (video ? "SIPD.Dialog.PreviewBadgeVideo" : "SIPD.Dialog.PreviewBadge");
+  // Blob and remote URLs are set after rendering. A video plays muted in a loop, like on the canvas.
+  const previewMarkup = video
+    ? `<video aria-label="${escapeHtml(defaultName)}" data-preview-video autoplay loop muted playsinline></video>`
+    : `<img alt="${escapeHtml(defaultName)}" data-preview-image>`;
   const content = `
     <div class="sipd-shell sipd-shell--import" data-ui-theme="${escapeHtml(defaults.uiTheme)}">
       <section class="sipd-hero">
@@ -1270,10 +1601,10 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
               <span class="sipd-panel-title">${localize("SIPD.Dialog.PreviewTitle")}</span>
               <span class="sipd-panel-hint">${localize("SIPD.Dialog.Summary", {width, height})}</span>
             </div>
-            <span class="sipd-pill is-type">${localize(remoteUrl ? "SIPD.Dialog.PreviewBadgeLinked" : "SIPD.Dialog.PreviewBadge")}</span>
+            <span class="sipd-pill is-type">${localize(previewBadge)}</span>
           </header>
           <div class="sipd-dialog__preview">
-            <img alt="${escapeHtml(defaultName)}" data-preview-image>
+            ${previewMarkup}
           </div>
         </section>
 
@@ -1296,10 +1627,11 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
               <label>${localize("SIPD.Dialog.Action")}</label>
               <div class="form-fields">
                 <select name="action">
-                  ${actionOptionsMarkup(defaults.action, {remoteUrl})}
+                  ${actionOptionsMarkup(defaults.action, {remoteUrl, video})}
                 </select>
               </div>
             </div>
+            ${gridFieldsMarkup({width, height, grid})}
             <div class="form-group sipd-upload-directory-row" data-option-row="uploadDirectory">
               <label>${localize("SIPD.Dialog.UploadDirectory")}</label>
               <div class="form-fields sipd-field-stack">
@@ -1367,7 +1699,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     position: {...importWindowState, height: "auto"},
     content,
     modal: true,
-    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl),
+    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height}),
     buttons: [
       {
         action: "confirm",
@@ -1383,7 +1715,8 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           recipients: readCheckedRecipients(button.form),
           prototypeToken: Boolean(button.form.elements.prototypeToken?.checked),
           chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
-          optimize: readOptimizeCheckbox(button.form)
+          optimize: readOptimizeCheckbox(button.form),
+          grid: readGridChoice(button.form)
         })
       },
       {
@@ -1422,6 +1755,112 @@ function readOptimizeCheckbox(form) {
   return field ? Boolean(field.checked) : true;
 }
 
+// Grid of a new scene. It starts with the grid the file name names, else with Foundry's default size.
+// The size and the squares across fill each other in. The field typed in last leads, squares are more exact than
+// the rounded size.
+function gridFieldsMarkup({width, height, grid=null}) {
+  const type = getDefaultGridType();
+  const size = grid?.size ?? DEFAULT_GRID_SIZE;
+  const source = grid ? "detected" : "default";
+  const columns = grid?.columns ?? countSquares(width, height, size).columns;
+  const options = getGridTypeChoices().map(choice => {
+    const selected = choice.value === type ? " selected" : "";
+    return `<option value="${choice.value}"${selected}>${escapeHtml(choice.label)}</option>`;
+  }).join("");
+  const pixelsLabel = localize("SIPD.Dialog.GridPixels");
+  const columnsLabel = localize("SIPD.Dialog.GridColumns");
+  return `
+            <div class="form-group" data-option-row="grid">
+              <label>${localize("SIPD.Dialog.Grid")}</label>
+              <div class="form-fields sipd-field-stack">
+                <div class="sipd-grid-fields">
+                  <select name="gridType" aria-label="${escapeHtml(localize("SIPD.Dialog.Grid"))}">${options}</select>
+                  <span class="sipd-grid-number">
+                    <input type="number" name="gridSize" min="${GRID_MIN_SIZE}" step="1" value="${size}" aria-label="${escapeHtml(pixelsLabel)}">
+                    <span>${escapeHtml(pixelsLabel)}</span>
+                  </span>
+                  <span class="sipd-grid-number" data-grid-squares>
+                    <input type="number" name="gridColumns" min="1" step="any" value="${columns}" aria-label="${escapeHtml(columnsLabel)}">
+                    <span>${escapeHtml(columnsLabel)}</span>
+                  </span>
+                </div>
+                <input type="hidden" name="gridSource" value="${source}">
+                <input type="hidden" name="gridLead" value="${grid?.columns ? "columns" : "size"}">
+                <small class="sipd-field-hint" data-grid-hint>${escapeHtml(gridHintText({width, height, size, type, source}))}</small>
+              </div>
+            </div>`;
+}
+
+// "30 x 20 squares" for a square grid, and where the size comes from. A size below Foundry's minimum is raised to it.
+function gridHintText({width, height, size, type, source}) {
+  const parts = [];
+  if ( (Number(size) > 0) && (Number(size) < GRID_MIN_SIZE) ) return localize("SIPD.Dialog.GridMinimum", {min: GRID_MIN_SIZE});
+  if ( (Number(type) === getGridTypes().SQUARE) && (Number(size) >= GRID_MIN_SIZE) ) {
+    const {columns, rows} = countSquares(width, height, size);
+    parts.push(localize("SIPD.Dialog.GridSquares", {columns: formatNumber(columns), rows: formatNumber(rows)}));
+  }
+  if ( source === "detected" ) parts.push(localize("SIPD.Dialog.GridDetected"));
+  else if ( source === "default" ) parts.push(localize("SIPD.Dialog.GridDefault"));
+  return parts.join(" ");
+}
+
+function formatNumber(value) {
+  try {
+    return new Intl.NumberFormat(getModuleLanguage()).format(value);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
+// The grid stays Foundry's default until the file name names one or a grid field is changed. Squares across count
+// when they were typed in last on a square grid.
+function readGridChoice(form) {
+  const elements = form?.elements ?? {};
+  if ( !elements.gridSize || (elements.gridSource?.value === "default") ) return null;
+  const type = Number(elements.gridType?.value);
+  const columns = Number(elements.gridColumns?.value);
+  const byColumns = (elements.gridLead?.value === "columns") && (type === getGridTypes().SQUARE) && (columns > 0);
+  return {type, size: Number(elements.gridSize.value), ...(byColumns ? {columns} : {})};
+}
+
+function bindGridFields(form, {width, height}={}) {
+  const elements = form?.elements ?? {};
+  const {gridType, gridSize, gridColumns, gridSource, gridLead} = elements;
+  if ( !gridType || !gridSize || !gridColumns || !gridSource ) return;
+  const squaresField = form.querySelector("[data-grid-squares]");
+  const hint = form.querySelector("[data-grid-hint]");
+
+  const refresh = () => {
+    const square = Number(gridType.value) === getGridTypes().SQUARE;
+    if ( squaresField ) squaresField.hidden = !square;
+    if ( hint ) {
+      hint.textContent = gridHintText({width, height, size: Number(gridSize.value), type: gridType.value, source: gridSource.value});
+    }
+  };
+  const changed = lead => {
+    gridSource.value = "manual";
+    if ( lead && gridLead ) gridLead.value = lead;
+  };
+
+  gridSize.addEventListener("input", () => {
+    changed("size");
+    const size = Number(gridSize.value);
+    if ( size >= GRID_MIN_SIZE ) gridColumns.value = String(countSquares(width, height, size).columns);
+    refresh();
+  });
+  gridColumns.addEventListener("input", () => {
+    changed("columns");
+    const size = sizeForColumns(width, gridColumns.value);
+    if ( size ) gridSize.value = String(size);
+    refresh();
+  });
+  gridType.addEventListener("change", () => {
+    changed();
+    refresh();
+  });
+  refresh();
+}
+
 // No recipient checked means everyone
 function recipientsMarkup(users=[]) {
   const options = users.map(user => `
@@ -1453,19 +1892,19 @@ function uploadDirectoryOptionsMarkup(choices=[]) {
   return choices.map(choice => `<option value="${escapeHtml(choice)}"></option>`).join("");
 }
 
-function actionOptionsMarkup(selectedAction=null, {remoteUrl=false}={}) {
-  return getActionChoices({remoteUrl}).map(({value, label, disabled}) => {
+function actionOptionsMarkup(selectedAction=null, {remoteUrl=false, video=false}={}) {
+  return getActionChoices({remoteUrl, video}).map(({value, label, disabled}) => {
     const disabledAttribute = disabled ? " disabled" : "";
     const selectedAttribute = value === selectedAction ? " selected" : "";
     return `<option value="${value}"${disabledAttribute}${selectedAttribute}>${escapeHtml(label)}</option>`;
   }).join("");
 }
 
-function getActionChoices({remoteUrl=false}={}) {
+function getActionChoices({remoteUrl=false, video=false}={}) {
   const allowedActions = new Set(getPermittedActions());
   return getAllActionChoices().map(choice => ({
     ...choice,
-    disabled: !isActionAvailable(choice.value) || (remoteUrl && !REMOTE_URL_ACTIONS.includes(choice.value))
+    disabled: !isActionAvailable(choice.value) || !isActionForMedia(choice.value, {remoteUrl, video})
   })).filter(choice => allowedActions.has(choice.value));
 }
 
@@ -1484,7 +1923,8 @@ const NO_ACTION_OPTIONS = Object.freeze({
   supportsUploadDirectory: false,
   supportsRecipients: false,
   supportsPrototypeToken: false,
-  supportsChatMode: false
+  supportsChatMode: false,
+  supportsGrid: false
 });
 
 function getActionBehavior(action) {
@@ -1494,7 +1934,8 @@ function getActionBehavior(action) {
         ...NO_ACTION_OPTIONS,
         supportsShareToPlayers: true,
         supportsActivateScene: true,
-        supportsNavigation: true
+        supportsNavigation: true,
+        supportsGrid: true
       };
     case ACTIONS.SCENE_BACKGROUND_CURRENT:
     case ACTIONS.SCENE_FOREGROUND_CURRENT:
@@ -1541,7 +1982,7 @@ function actionUsesSelectableUploadDirectory(action) {
   return getActionBehavior(action).supportsUploadDirectory;
 }
 
-function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
+function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0}={}) {
   const form = dialog.element.querySelector("form");
   if ( !form ) return;
 
@@ -1554,7 +1995,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     secondaryLabel: localize("SIPD.Dialog.Cancel")
   });
 
-  const previewImage = form.querySelector("[data-preview-image]");
+  const previewImage = form.querySelector("[data-preview-image]") ?? form.querySelector("[data-preview-video]");
   if ( previewImage && previewUrl ) {
     previewImage.src = previewUrl;
   }
@@ -1577,7 +2018,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     uploadDirectory: form.querySelector('[data-option-row="uploadDirectory"]'),
     recipients: form.querySelector('[data-option-row="recipients"]'),
     prototypeToken: form.querySelector('[data-option-row="prototypeToken"]'),
-    chatMode: form.querySelector('[data-option-row="chatMode"]')
+    chatMode: form.querySelector('[data-option-row="chatMode"]'),
+    grid: form.querySelector('[data-option-row="grid"]')
   };
   const setRowVisible = (row, visible) => {
     if ( !row ) return;
@@ -1607,19 +2049,26 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null) {
     setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
     setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken);
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
+    setRowVisible(optionRows.grid, behavior.supportsGrid);
     setRowVisible(optimizeRow, requiresPersistentPath(actionField.value, sharing));
   };
 
   actionField.addEventListener("change", updateFields);
   shareToPlayersField.addEventListener?.("change", updateFields);
   updateFields();
+  bindGridFields(form, {width, height});
 }
 
-function getDialogDefaults({remoteUrl=false}={}) {
-  const choices = getActionChoices({remoteUrl});
-  const preferredAction = game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING)
+// The last target when it is reused, else the default target
+function getPreferredAction() {
+  return game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING)
     ? game.settings.get(MODULE_ID, LAST_ACTION_SETTING)
     : game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING);
+}
+
+function getDialogDefaults({remoteUrl=false, video=false}={}) {
+  const choices = getActionChoices({remoteUrl, video});
+  const preferredAction = getPreferredAction();
 
   const resolvedAction = choices.find(choice => choice.value === preferredAction && !choice.disabled)?.value
     ?? choices.find(choice => choice.value === game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING) && !choice.disabled)?.value
@@ -1909,7 +2358,7 @@ async function executeAction(data) {
       shareImageToPlayers(data.path, data.name, data.recipients);
       break;
     case ACTIONS.PREVIEW_ONLY:
-      openImagePreview(data.path, data.name, {revokeOnClose: data.temporaryObjectUrl});
+      openImagePreview(data.path, data.name, {revokeOnClose: data.temporaryObjectUrl, video: Boolean(data.video)});
       break;
     default:
       throw new Error(localize("SIPD.Error.UnsupportedAction"));
@@ -1930,14 +2379,16 @@ function hasCanvasScene() {
   return Boolean(canvas?.scene && canvas?.ready);
 }
 
-async function createSceneFromImage({name, path, width, height, activateScene, navigation}, {notify=true}={}) {
+// Without a grid from the file name or the dialog the scene keeps the grid Foundry and the system give it.
+async function createSceneFromImage({name, path, width, height, activateScene, navigation, grid=null}, {notify=true}={}) {
   const scene = await Scene.create({
     name,
     navigation,
     active: activateScene,
     width,
     height,
-    padding: 0
+    padding: 0,
+    ...(grid ? {grid: {type: grid.type, size: grid.size}} : {})
   });
 
   await applyImageToSceneLevel(scene, {path, width, height});
@@ -2143,12 +2594,7 @@ function fitDimensions(width, height, maxWidth, maxHeight) {
 async function createJournalEntryFromImage({name, path}, {notify=true}={}) {
   const entry = await JournalEntry.create({
     name,
-    pages: [{
-      name,
-      type: "image",
-      src: path,
-      title: {show: false}
-    }]
+    pages: [journalPageData({name, path})]
   });
 
   if ( notify ) ui.notifications.info(localize("SIPD.Notification.JournalCreated", {name: entry?.name ?? name}));
@@ -2160,16 +2606,21 @@ async function createJournalEntryWithPages({name, items}) {
   const entry = await JournalEntry.create({
     name,
     pages: items.map((item, index) => ({
-      name: item.name,
-      type: "image",
-      src: item.path,
-      title: {show: false},
+      ...journalPageData({name: item.name, path: item.path}),
       sort: (index + 1) * 100000
     }))
   });
 
   ui.notifications.info(localize("SIPD.Notification.JournalCreated", {name: entry?.name ?? name}));
   return entry;
+}
+
+// An image page, or a video page that plays in a loop like an animated map
+function journalPageData({name, path}) {
+  if ( isVideoPath(path) ) {
+    return {name, type: "video", src: path, title: {show: false}, video: {controls: true, loop: true, autoplay: true}};
+  }
+  return {name, type: "image", src: path, title: {show: false}};
 }
 
 // A map pin: a journal entry with the image page and a note at the drop point (or the scene center).
@@ -2301,7 +2752,7 @@ function shareImageToPlayers(path, name, recipients=[]) {
   journalCollection.showImage(path, {title: name, showTitle: true, ...(users.length ? {users} : {})});
 }
 
-function openImagePreview(path, name, {revokeOnClose=null}={}) {
+function openImagePreview(path, name, {revokeOnClose=null, video=false}={}) {
   const popout = new foundry.applications.apps.ImagePopout({
     src: path,
     showTitle: true,
@@ -2311,6 +2762,8 @@ function openImagePreview(path, name, {revokeOnClose=null}={}) {
       ...getSavedWindowState(WINDOW_KEYS.PREVIEW)
     }
   });
+  // The popout tells a video by the file extension, which a blob URL of a pasted video lacks
+  if ( video && !popout.isVideo ) Object.defineProperty(popout, "isVideo", {value: true});
 
   popout.addEventListener("render", () => {
     applyWindowState(popout, WINDOW_KEYS.PREVIEW);
@@ -2361,13 +2814,21 @@ function batchThumbnailsMarkup(items, defaultName) {
     const note = description
       ? `<small class="sipd-batch-thumb__optimized" data-optimize-thumb>${escapeHtml(batchThumbOptimizeText(description))}</small>`
       : "";
+    // Only shown while one new scene per image is the target
+    const gridNote = item.grid
+      ? `<small class="sipd-batch-thumb__grid" data-grid-thumb hidden>${escapeHtml(localize("SIPD.Batch.GridThumb", {size: item.grid.size}))}</small>`
+      : "";
+    const preview = item.video
+      ? `<video aria-label="${escapeHtml(label)}" data-batch-thumb="${index}" muted preload="metadata" playsinline></video>`
+      : `<img alt="${escapeHtml(label)}" data-batch-thumb="${index}">`;
     return `
       <figure class="sipd-batch-thumb">
-        <img alt="${escapeHtml(label)}" data-batch-thumb="${index}">
+        ${preview}
         <figcaption>
           <span>${escapeHtml(label)}</span>
           <small>${item.width} x ${item.height}</small>
           ${note}
+          ${gridNote}
         </figcaption>
       </figure>`;
   }).join("");
@@ -2545,6 +3006,7 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
     chatMode: form.querySelector('[data-option-row="chatMode"]'),
     navigation: form.querySelector('[data-option-row="navigation"]')
   };
+  const gridNotes = Array.from(form.querySelectorAll?.("[data-grid-thumb]") ?? []);
   const canChooseDirectory = Boolean(game.user?.isGM);
   const updateFields = () => {
     const action = actionField.value;
@@ -2556,6 +3018,7 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
     for ( const [key, row] of Object.entries(rows) ) {
       if ( row ) row.hidden = !visible[key];
     }
+    for ( const note of gridNotes ) note.hidden = action !== ACTIONS.SCENE_BACKGROUND;
   };
 
   actionField.addEventListener("change", updateFields);
@@ -2574,7 +3037,7 @@ function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
 }
 
 function normalizeBatchDecision(decision) {
-  if ( !decision ) return null;
+  if ( !decision || (typeof decision !== "object") ) return null;
 
   const allowedActions = new Set(getBatchActionChoices().filter(choice => !choice.disabled).map(choice => choice.value));
   if ( !allowedActions.has(decision.action) ) return null;
@@ -2808,8 +3271,42 @@ export const __test__ = {
   PLAYER_SELECTABLE_ACTIONS,
   REMOTE_URL_ACTIONS,
   SCENE_ACTIONS,
+  IMAGE_ONLY_ACTIONS,
+  QUICK_TARGETS,
+  QUICK_ARM_DURATION,
   PLAYER_UPLOAD_DIRECTORY,
   SHARED_UPLOAD_DIRECTORY,
+  registerQuickKeybindings,
+  isVideoType,
+  baseMediaType,
+  isFoundryDropZone,
+  isCopiedFileName,
+  isSupportedMediaType,
+  isVideoFile,
+  readMediaDimensions,
+  readVideoDimensions,
+  resolveImportDecision,
+  buildQuickDecision,
+  getQuickAction,
+  getQuickTargetLabel,
+  onQuickInsertKey,
+  quickInsertFromClipboard,
+  readClipboardSources,
+  importSources,
+  armQuickTarget,
+  hasArmedQuickTarget,
+  takeArmedQuickTarget,
+  isActionForMedia,
+  getGridTypes,
+  getGridTypeValues,
+  getDefaultGridType,
+  getGridTypeChoices,
+  gridFieldsMarkup,
+  gridHintText,
+  readGridChoice,
+  bindGridFields,
+  getPreferredAction,
+  journalPageData,
   getAllActionChoices,
   getActionSettingChoices,
   getPlayerActionSettingChoices,

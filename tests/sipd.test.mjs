@@ -361,7 +361,8 @@ test("user access, directory, and naming helpers normalize values and permission
     recipients: [],
     prototypeToken: false,
     chatMode: "current",
-    optimize: true
+    optimize: true,
+    grid: null
   });
 
   assert.equal(__test__.requiresPersistentPath(__test__.ACTIONS.PREVIEW_ONLY, false), false);
@@ -444,7 +445,8 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     recipients: [],
     prototypeToken: false,
     chatMode: "current",
-    optimize: true
+    optimize: true,
+    grid: null
   });
   assert.match(env.state.lastDialogOptions.content, /sipd-shell/);
   // The height follows the content, only the width comes from the saved window state
@@ -1736,7 +1738,7 @@ test("images posted to chat open in a popout on click", () => {
   const image = new TestHTMLElement();
   image.getAttribute = (name) => (name === "src" ? "chat.png" : "Chat Image");
   const html = new TestHTMLElement();
-  html.setQuerySelectorAll(".sipd-chat-images img", [image]);
+  html.setQuerySelectorAll(".sipd-chat-images img, .sipd-chat-images video", [image]);
   __test__.onRenderChatMessage({}, html);
   image.dispatch("click");
   assert.equal(env.state.imagePopouts[0].config.src, "chat.png");
@@ -1894,4 +1896,760 @@ test("the upload directory hint names the storage root as escaped text", () => {
   env.state.localizations.set("SIPD.Dialog.UploadDirectoryHint", "Below <world-id>/{root}");
   assert.doesNotMatch(__test__.uploadDirectoryHintMarkup(), /<world-id>/);
   env.state.localizations.delete("SIPD.Dialog.UploadDirectoryHint");
+});
+
+// Video elements that report a size once their source is set
+function stubVideoElements({ width = 1920, height = 1080, error = false } = {}) {
+  const original = globalThis.document.createElement;
+  const created = [];
+  globalThis.document.createElement = (tag) => {
+    assert.equal(tag, "video");
+    const video = {
+      removeAttribute(name) {
+        this.removed = name;
+      },
+      load() {},
+      set src(value) {
+        this.source = value;
+        queueMicrotask(() => {
+          if ( error ) {
+            this.onerror?.();
+            return;
+          }
+          this.videoWidth = width;
+          this.videoHeight = height;
+          this.onloadedmetadata?.();
+        });
+      }
+    };
+    created.push(video);
+    return video;
+  };
+  return {
+    created,
+    restore() {
+      if ( original ) globalThis.document.createElement = original;
+      else delete globalThis.document.createElement;
+    }
+  };
+}
+
+// A clipboard the shortcut can read, or none at all
+function stubClipboard(items, { secure = true, refuse = false } = {}) {
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const secureDescriptor = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
+  const clipboard = items === null ? undefined : {
+    async read() {
+      if ( refuse ) throw new DOMException("Read permission denied.", "NotAllowedError");
+      return items;
+    }
+  };
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard }, configurable: true, writable: true });
+  Object.defineProperty(globalThis, "isSecureContext", { value: secure, configurable: true, writable: true });
+  return () => {
+    if ( navigatorDescriptor ) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else delete globalThis.navigator;
+    if ( secureDescriptor ) Object.defineProperty(globalThis, "isSecureContext", secureDescriptor);
+    else delete globalThis.isSecureContext;
+  };
+}
+
+function clipboardItem(type, content) {
+  return { types: [type], getType: async () => new Blob([content], { type }) };
+}
+
+function createGridForm({ type = "1", size = "140", columns = "30", source = "detected" } = {}) {
+  const field = (value) => {
+    const element = new TestHTMLElement();
+    element.value = value;
+    return element;
+  };
+  const form = new TestHTMLElement();
+  form.elements = { gridType: field(type), gridSize: field(size), gridColumns: field(columns), gridSource: field(source) };
+  const squares = new TestHTMLElement();
+  const hint = new TestHTMLElement();
+  form.setQuerySelector("[data-grid-squares]", squares);
+  form.setQuerySelector("[data-grid-hint]", hint);
+  return { form, squares, hint };
+}
+
+test("keyboard shortcuts insert to the preselected target and show the image, both with Alt", async () => {
+  const calls = [];
+  env.game.keybindings = { register: (namespace, action, data) => calls.push({ namespace, action, data }) };
+  try {
+    await env.hooks.trigger("init");
+    assert.deepEqual(calls.map((call) => [call.namespace, call.action, call.data.editable]), [
+      ["sephrals-image-paste-drop", "quickInsert", [{ key: "KeyV", modifiers: ["Alt"] }]],
+      ["sephrals-image-paste-drop", "quickShare", [{ key: "KeyP", modifiers: ["Alt"] }]]
+    ]);
+    assert.equal(calls[0].data.name, "SIPD.Keybindings.QuickInsert.Name");
+
+    // Users who may not use the tool keep the key for other modules
+    env.state.gm = false;
+    assert.equal(calls[0].data.onDown(), false);
+    env.state.gm = true;
+    const restore = stubClipboard(null, { secure: false });
+    try {
+      assert.equal(calls[1].data.onDown(), true);
+      await flushPromises();
+      assert.equal(__test__.takeArmedQuickTarget(), __test__.QUICK_TARGETS.SHARE);
+    } finally {
+      restore();
+    }
+  } finally {
+    delete env.game.keybindings;
+  }
+});
+
+test("videos count as media for paste, drop and links, portraits only take images", () => {
+  const { ACTIONS } = __test__;
+  assert.equal(__test__.isSupportedMediaType("video/webm"), true);
+  assert.equal(__test__.isSupportedMediaType("video/MP4"), true);
+  assert.equal(__test__.isSupportedMediaType("video/quicktime"), false);
+  assert.equal(__test__.isSupportedMediaType("image/png"), true);
+  assert.equal(__test__.isSupportedMediaType("text/plain"), false);
+
+  const video = new File(["v"], "River Loop.webm", { type: "video/webm" });
+  const movie = new File(["m"], "clip.mov", { type: "video/quicktime" });
+  assert.deepEqual(__test__.collectImageFiles({ items: [
+    { kind: "file", type: "video/quicktime", getAsFile: () => movie },
+    { kind: "file", type: "video/webm", getAsFile: () => video }
+  ] }), [video]);
+  assert.deepEqual(__test__.collectImageFiles({ items: [], files: [movie, video] }), [video]);
+  assert.equal(__test__.hasTransferableImage({ files: [video], items: [], types: [] }), true);
+  assert.equal(__test__.hasTransferableImage({ files: [movie], items: [], types: [] }), false);
+
+  assert.equal(__test__.parseImageUrl("https://maps.test/river.webm"), "https://maps.test/river.webm");
+  assert.equal(__test__.parseImageUrl("https://maps.test/clip.mov"), null);
+  assert.equal(__test__.guessMimeTypeFromUri("https://maps.test/river.mp4?sig=1"), "video/mp4");
+  assert.equal(__test__.guessMimeTypeFromUri("https://maps.test/map.png?width=800"), "image/png");
+  assert.equal(__test__.guessMimeTypeFromUri("not a url.ogv"), "video/ogg");
+  assert.equal(__test__.extensionForMimeType("video/webm"), "webm");
+  assert.equal(__test__.extensionForMimeType("video/ogg"), "ogv");
+  assert.equal(__test__.extensionForMimeType("video/x-m4v"), "m4v");
+  const prepared = __test__.prepareClipboardFile(video);
+  assert.equal(prepared.name, "river-loop.webm");
+  assert.equal(__test__.isVideoFile(prepared), true);
+
+  assert.equal(__test__.getActionChoices({ video: true }).find((choice) => choice.value === ACTIONS.ACTOR_PORTRAIT).disabled, true);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.ACTOR_PORTRAIT }, { video: true }).action, ACTIONS.PREVIEW_ONLY);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.JOURNAL_IMAGE }, { video: true }).action, ACTIONS.JOURNAL_IMAGE);
+  assert.equal(__test__.isActionForMedia(ACTIONS.TOKEN_IMAGE, { video: true }), true);
+  assert.equal(__test__.isActionForMedia(ACTIONS.TILE_CENTERED, { remoteUrl: true, video: true }), false);
+
+  assert.deepEqual(__test__.journalPageData({ name: "River", path: "maps/river.webm" }), {
+    name: "River", type: "video", src: "maps/river.webm", title: { show: false }, video: { controls: true, loop: true, autoplay: true }
+  });
+  assert.deepEqual(__test__.journalPageData({ name: "Map", path: "maps/map.webp" }), { name: "Map", type: "image", src: "maps/map.webp", title: { show: false } });
+});
+
+test("video sizes come from the metadata, a video without a picture is refused", async () => {
+  let videos = stubVideoElements({ width: 1280, height: 720 });
+  try {
+    assert.deepEqual(await __test__.readMediaDimensions("blob:v", { video: true }), { width: 1280, height: 720 });
+    assert.equal(videos.created[0].muted, true);
+    assert.equal(videos.created[0].preload, "metadata");
+    assert.equal(videos.created[0].removed, "src");
+  } finally {
+    videos.restore();
+  }
+  videos = stubVideoElements({ width: 0, height: 0 });
+  try {
+    await assert.rejects(() => __test__.readVideoDimensions("blob:audio"), /dimension read failed/);
+  } finally {
+    videos.restore();
+  }
+  videos = stubVideoElements({ error: true });
+  try {
+    await assert.rejects(() => __test__.readVideoDimensions("blob:broken"), /dimension read failed/);
+  } finally {
+    videos.restore();
+  }
+  // Images still load as images
+  assert.deepEqual(await __test__.readMediaDimensions("blob:i"), { width: 320, height: 200 });
+});
+
+test("a pasted video plays in the preview, is uploaded as it is and becomes a video page", async () => {
+  const { ACTIONS } = __test__;
+  const videos = stubVideoElements();
+  setSetting(__test__.CONVERT_WEBP_SETTING, true);
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 1024);
+  env.state.uploadResponse = { path: "worlds/world-id/sephrals-image-paste-drop/custom/river.webm" };
+  env.state.dialogWaitResult = { name: "River", action: ACTIONS.JOURNAL_IMAGE, uploadDirectory: "custom" };
+  try {
+    await __test__.handleImportedImage(new File(["webm data"], "River.webm", { type: "video/webm" }));
+    const content = env.state.lastDialogOptions.content;
+    assert.match(content, /<video aria-label="[^"]+" data-preview-video autoplay loop muted playsinline>/);
+    assert.match(content, /SIPD\.Dialog\.PreviewBadgeVideo/);
+    assert.match(content, /1920 x 1080/);
+    assert.match(content, /value="actor-portrait" disabled/);
+    assert.doesNotMatch(content, /data-option-row="optimize"/);
+
+    const uploaded = env.state.uploadCalls[0].file;
+    assert.equal(uploaded.type, "video/webm");
+    assert.equal(uploaded.name, `${await __test__.hashFileContent(new Blob(["webm data"]))}.webm`);
+    assert.deepEqual(env.state.journalCreates[0].pages[0].type, "video");
+    assert.equal(env.state.journalCreates[0].pages[0].src, "worlds/world-id/sephrals-image-paste-drop/custom/river.webm");
+
+    // The preview of a pasted video is a blob URL, the popout still has to play it as a video
+    env.state.dialogWaitResult = { name: "Peek", action: ACTIONS.PREVIEW_ONLY };
+    await __test__.handleImportedImage(new File(["webm data"], "Peek.webm", { type: "video/webm" }));
+    assert.equal(env.state.imagePopouts.at(-1).isVideo, true);
+    assert.match(env.state.imagePopouts.at(-1).config.src, /^blob:/);
+  } finally {
+    videos.restore();
+  }
+});
+
+test("videos posted to chat open in a popout and linked videos keep their size", async () => {
+  const { ACTIONS } = __test__;
+  const element = new TestHTMLElement();
+  element.getAttribute = (name) => ({ src: "river.webm", "aria-label": "River" })[name] ?? null;
+  const html = new TestHTMLElement();
+  html.setQuerySelectorAll(".sipd-chat-images img, .sipd-chat-images video", [element]);
+  __test__.onRenderChatMessage({}, html);
+  element.dispatch("click");
+  assert.equal(env.state.imagePopouts[0].config.window.title, "River");
+
+  const videos = stubVideoElements({ width: 640, height: 360 });
+  env.state.dialogWaitResult = (options) => {
+    if ( options.buttons[0].action === "useUrl" ) return options.buttons[0].callback();
+    return { name: "Linked River", action: ACTIONS.CHAT_IMAGE };
+  };
+  try {
+    await __test__.handleRemoteImageUrl("https://maps.test/river.webm");
+    assert.match(env.state.lastDialogOptions.content, /data-preview-video/);
+    assert.match(env.state.lastDialogOptions.content, /640 x 360/);
+    assert.match(env.state.chatCreates[0].content, /<video src="https:\/\/maps\.test\/river\.webm"/);
+  } finally {
+    videos.restore();
+  }
+});
+
+test("the grid fields start with the file name's grid and fill each other in", () => {
+  env.state.localizations.set("SIPD.Dialog.GridSquares", "{columns} x {rows} squares.");
+  env.state.localizations.set("SIPD.Dialog.GridDetected", "From the file name.");
+  env.state.localizations.set("SIPD.Dialog.GridDefault", "Default size.");
+  try {
+    const markup = __test__.gridFieldsMarkup({ width: 4200, height: 2800, grid: { size: 140 } });
+    assert.match(markup, /name="gridSize" min="20" step="1" value="140"/);
+    assert.match(markup, /name="gridColumns" min="1" step="any" value="30"/);
+    assert.match(markup, /name="gridSource" value="detected"/);
+    assert.match(markup, /<option value="1" selected>SCENE\.GridSquare<\/option>/);
+    assert.match(markup, /30 x 20 squares\. From the file name\./);
+    assert.match(__test__.gridFieldsMarkup({ width: 1000, height: 800 }), /value="default">[\s\S]*10 x 8 squares\. Default size\./);
+    assert.equal(__test__.getGridTypeChoices().length, 6);
+
+    // The system's grid type is preselected
+    env.game.system = { grid: { type: 2 } };
+    assert.equal(__test__.getDefaultGridType(), 2);
+    assert.match(__test__.gridFieldsMarkup({ width: 1000, height: 800 }), /<option value="2" selected>/);
+    env.game.system = { grid: { type: 99 } };
+    assert.equal(__test__.getDefaultGridType(), 1);
+    delete env.game.system;
+
+    const { form, squares, hint } = createGridForm();
+    __test__.bindGridFields(form, { width: 4200, height: 2800 });
+    assert.equal(hint.textContent, "30 x 20 squares. From the file name.");
+    assert.equal(squares.hidden, false);
+
+    form.elements.gridSize.value = "100";
+    form.elements.gridSize.dispatch("input");
+    assert.equal(form.elements.gridColumns.value, "42");
+    assert.equal(form.elements.gridSource.value, "manual");
+    assert.equal(hint.textContent, "42 x 28 squares.");
+
+    form.elements.gridColumns.value = "21";
+    form.elements.gridColumns.dispatch("input");
+    assert.equal(form.elements.gridSize.value, "200");
+
+    // Hexagons have no squares to count
+    form.elements.gridType.value = "2";
+    form.elements.gridType.dispatch("change");
+    assert.equal(squares.hidden, true);
+    assert.equal(hint.textContent, "");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 2, size: 200 });
+
+    assert.equal(__test__.readGridChoice(createGridForm({ source: "default" }).form), null);
+    assert.equal(__test__.readGridChoice({ elements: {} }), null);
+    __test__.bindGridFields({ elements: {} });
+  } finally {
+    for ( const key of ["SIPD.Dialog.GridSquares", "SIPD.Dialog.GridDetected", "SIPD.Dialog.GridDefault"] ) env.state.localizations.delete(key);
+  }
+});
+
+test("a new scene gets the grid from the file name or the dialog, scaled with a shrunk upload", async () => {
+  const { ACTIONS } = __test__;
+  env.state.imageBehavior = { width: 4200, height: 2800, error: false };
+  env.state.uploadResponse = { path: "maps/tavern.png" };
+  env.state.dialogWaitResult = { name: "Tavern", action: ACTIONS.SCENE_BACKGROUND, activateScene: false, navigation: true, grid: { type: 1, size: 140 } };
+
+  await __test__.handleImportedImage(createImageFile("Tavern_30x20.png"));
+  assert.match(env.state.lastDialogOptions.content, /name="gridSource" value="detected"/);
+  assert.match(env.state.lastDialogOptions.content, /data-option-row="grid"/);
+  assert.deepEqual(env.state.sceneCreates[0].grid, { type: 1, size: 140 });
+
+  // Other targets ignore the grid, a grid below the minimum keeps Foundry's default
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TILE_CENTERED, grid: { type: 1, size: 140 } }).grid, null);
+  env.state.dialogWaitResult = { name: "Tiny", action: ACTIONS.SCENE_BACKGROUND, grid: { type: 1, size: 5 } };
+  await __test__.handleImportedImage(createImageFile("Tiny.png"));
+  assert.deepEqual(env.state.sceneCreates[1].grid, { type: 1, size: 20 });
+  env.state.dialogWaitResult = { name: "Empty", action: ACTIONS.SCENE_BACKGROUND, grid: { type: 1, size: "" } };
+  await __test__.handleImportedImage(createImageFile("Empty.png"));
+  assert.equal("grid" in env.state.sceneCreates[2], false);
+  // Squares typed in lead: 29.5 across a 4200 px map, the scene follows the rounded size
+  env.state.dialogWaitResult = { name: "Columns", action: ACTIONS.SCENE_BACKGROUND, grid: { type: 1, size: 142, columns: 29.5 } };
+  await __test__.handleImportedImage(createImageFile("Columns.png"));
+  assert.deepEqual([env.state.sceneCreates[3].grid, env.state.sceneCreates[3].width, env.state.sceneCreates[3].height], [{ type: 1, size: 142 }, 4189, 2793]);
+
+  setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 2100);
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage() {} };
+    }
+    async convertToBlob() {
+      return new Blob(["small"], { type: "image/png" });
+    }
+  };
+  env.state.dialogWaitResult = { name: "Shrunk", action: ACTIONS.SCENE_BACKGROUND, grid: { type: 1, size: 140 } };
+  try {
+    await __test__.handleImportedImage(createImageFile("Tavern_30x20.png"));
+    assert.deepEqual([env.state.sceneCreates[4].width, env.state.sceneCreates[4].grid], [2100, { type: 1, size: 70 }]);
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});
+
+test("one new scene per image takes the grid each file name names", async () => {
+  const { ACTIONS } = __test__;
+  env.state.imageBehavior = { width: 4000, height: 3000, error: false };
+  env.state.uploadResponse = { path: "maps/map.png" };
+  const dialogs = answerDialogs({ name: "Maps", action: ACTIONS.SCENE_BACKGROUND, navigation: true });
+  await __test__.handleImportedBatch([createImageFile("Keep_40x30.png", "image/png", "one"), createImageFile("image.png", "image/png", "two")]);
+
+  assert.equal((dialogs[0].content.match(/SIPD\.Batch\.GridThumb/g) ?? []).length, 1);
+  assert.match(dialogs[0].content, /data-grid-thumb hidden/);
+  assert.deepEqual(env.state.sceneCreates[0].grid, { type: 1, size: 100 });
+  assert.equal("grid" in env.state.sceneCreates[1], false);
+
+  // Other batch targets leave the grid alone
+  env.reset();
+  env.state.imageBehavior = { width: 4000, height: 3000, error: false };
+  env.state.uploadResponse = { path: "maps/map.png" };
+  answerDialogs({ name: "Maps", action: ACTIONS.JOURNAL_IMAGE });
+  await __test__.handleImportedBatch([createImageFile("Keep_40x30.png", "image/png", "one"), createImageFile("Hall_40x30.png", "image/png", "two")]);
+  assert.equal(env.state.journalCreates.length, 2);
+  assert.equal(env.state.sceneCreates.length, 0);
+});
+
+test("the batch dialog shows grid notes only for new scenes and plays no video thumbnails", () => {
+  const { ACTIONS } = __test__;
+  const markup = __test__.batchThumbnailsMarkup([
+    { sourceName: "River.webm", width: 100, height: 50, video: true, file: { type: "video/webm" } },
+    { sourceName: "Keep_40x30.png", width: 4000, height: 3000, grid: { size: 100 }, file: { type: "image/png" } }
+  ], "Maps");
+  assert.match(markup, /<video aria-label="River" data-batch-thumb="0" muted preload="metadata" playsinline><\/video>/);
+  assert.match(markup, /<img alt="Keep_40x30" data-batch-thumb="1">/);
+
+  const note = new TestHTMLElement();
+  note.hidden = true;
+  const form = new TestHTMLElement();
+  const actionField = new TestHTMLElement();
+  actionField.value = ACTIONS.SCENE_BACKGROUND;
+  form.elements = { action: actionField };
+  form.setQuerySelectorAll("[data-grid-thumb]", [note]);
+  const element = new TestHTMLElement();
+  element.setQuerySelector("form", form);
+  __test__.configureBatchDialogForm({ element, addEventListener() {} }, "signature", []);
+  assert.equal(note.hidden, false);
+  actionField.value = ACTIONS.CHAT_IMAGE;
+  actionField.dispatch("change");
+  assert.equal(note.hidden, true);
+});
+
+test("the shortcut sends the copied image to the preselected target without a dialog", async () => {
+  const { ACTIONS, QUICK_TARGETS } = __test__;
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.TILE_CENTERED);
+  env.canvas.ready = true;
+  env.canvas.scene = createBatchScene();
+  env.state.uploadResponse = { path: "worlds/world-id/sephrals-image-paste-drop/clipboard-images/2024/03/tile.png" };
+  const restore = stubClipboard([clipboardItem("text/html", "<img>"), clipboardItem("image/png", "png data")]);
+  try {
+    assert.equal(__test__.getQuickTargetLabel(QUICK_TARGETS.DEFAULT), "Tile Centered");
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.DEFAULT);
+    assert.equal(env.state.lastDialogOptions, null);
+    assert.equal(env.canvas.scene.tileDocs.length, 1);
+    assert.equal(env.canvas.scene.tileDocs[0].texture.src, "worlds/world-id/sephrals-image-paste-drop/clipboard-images/2024/03/tile.png");
+    assert.match(env.state.uploadCalls[0].target, /clipboard-images\/2024\/03$/);
+    // A shortcut does not change the target the dialog reuses
+    assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.LAST_ACTION_SETTING), false);
+  } finally {
+    restore();
+  }
+});
+
+test("the share shortcut shows the copied image or image link to everyone", async () => {
+  const { QUICK_TARGETS } = __test__;
+  env.state.users = [{ id: "gm-user", name: "GM", active: true }, { id: "p1", name: "Player", active: true }];
+  env.state.uploadResponse = { path: "worlds/world-id/sephrals-image-paste-drop/clipboard-images/shared/shared-gm-user.png" };
+  let restore = stubClipboard([clipboardItem("image/png", "screenshot")]);
+  try {
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.SHARE);
+    assert.equal(env.state.lastDialogOptions, null);
+    assert.equal(env.state.showImageCalls.length, 1);
+    assert.match(env.state.showImageCalls[0].path, /shared-gm-user\.png\?v=/);
+    assert.equal("users" in env.state.showImageCalls[0].options, false);
+  } finally {
+    restore();
+  }
+
+  const fetched = [];
+  env.state.fetchImpl = async (url) => {
+    fetched.push(url);
+    return { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
+  };
+  restore = stubClipboard([clipboardItem("text/plain", "https://maps.test/handout.png")]);
+  try {
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.SHARE);
+    assert.deepEqual(fetched, ["https://maps.test/handout.png"]);
+    assert.equal(env.state.showImageCalls.length, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("without clipboard access the shortcut waits a few seconds for the next paste", async () => {
+  const { QUICK_TARGETS, QUICK_ARM_DURATION } = __test__;
+  env.state.localizations.set("SIPD.Quick.Armed", "Press Ctrl+V: {target}");
+  env.state.uploadResponse = { path: "shared.png" };
+  let restore = stubClipboard(null, { secure: false });
+  try {
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.SHARE);
+    assert.deepEqual(env.state.notifications.info, ["Press Ctrl+V: Share Image"]);
+    assert.equal(__test__.hasArmedQuickTarget(), true);
+
+    // The paste setting is off, the waiting shortcut still takes the paste
+    setSetting(__test__.ENABLE_PASTE_SETTING, false);
+    await __test__.onPaste(createPasteEvent("", { file: createImageFile() }));
+    assert.equal(env.state.lastDialogOptions, null);
+    assert.equal(env.state.showImageCalls.length, 1);
+    assert.equal(__test__.hasArmedQuickTarget(), false);
+
+    // Without a waiting shortcut the paste setting applies again
+    const ignored = createPasteEvent("", { file: createImageFile() });
+    await __test__.onPaste(ignored);
+    assert.equal(ignored.prevented, undefined);
+  } finally {
+    restore();
+    env.state.localizations.delete("SIPD.Quick.Armed");
+  }
+
+  // A refused permission and a clipboard without an image wait as well, but only for a few seconds
+  restore = stubClipboard([], { refuse: true });
+  try {
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.DEFAULT);
+    assert.equal(__test__.hasArmedQuickTarget(), true);
+    env.state.now += QUICK_ARM_DURATION + 1;
+    assert.equal(__test__.takeArmedQuickTarget(), null);
+  } finally {
+    restore();
+  }
+  restore = stubClipboard([clipboardItem("text/plain", "just some text")]);
+  try {
+    await __test__.quickInsertFromClipboard(QUICK_TARGETS.DEFAULT);
+    assert.equal(__test__.takeArmedQuickTarget(), QUICK_TARGETS.DEFAULT);
+  } finally {
+    restore();
+  }
+});
+
+test("a dropped image takes a waiting shortcut too", async () => {
+  const { QUICK_TARGETS } = __test__;
+  env.state.uploadResponse = { path: "shared.png" };
+  __test__.armQuickTarget(QUICK_TARGETS.SHARE);
+  const file = createImageFile("drop.png");
+  const event = {
+    target: new TestHTMLElement(),
+    dataTransfer: {
+      files: [file],
+      items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+      types: ["Files"],
+      getData: () => ""
+    },
+    preventDefault() {},
+    stopPropagation() {}
+  };
+  await __test__.onDrop(event);
+  assert.equal(env.state.lastDialogOptions, null);
+  assert.equal(env.state.showImageCalls.length, 1);
+});
+
+test("a shortcut target that is not possible right now opens the dialog instead", async () => {
+  const { ACTIONS, QUICK_TARGETS } = __test__;
+  env.state.localizations.set("SIPD.Quick.Unavailable", "Not now: {target}");
+  env.state.localizations.set("SIPD.Action.TokenImage", "Token Image");
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.TOKEN_IMAGE);
+  env.state.dialogWaitResult = null;
+  try {
+    // No token is selected
+    assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT), null);
+    await __test__.importSources([createImageFile()], { quickTarget: QUICK_TARGETS.DEFAULT });
+    assert.deepEqual(env.state.notifications.warn, ["Not now: Token Image"]);
+    assert.match(env.state.lastDialogOptions.content, /sipd-shell--import/);
+
+    // Players without the share target get the dialog as well
+    enablePlayerTargets();
+    assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.SHARE), null);
+    // The default target follows the settings like the dialog does
+    setSetting(__test__.REMEMBER_LAST_ACTION_SETTING, false);
+    setSetting(__test__.DEFAULT_ACTION_SETTING, ACTIONS.PREVIEW_ONLY);
+    assert.equal(__test__.getQuickAction(QUICK_TARGETS.DEFAULT), ACTIONS.PREVIEW_ONLY);
+    assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT).action, ACTIONS.PREVIEW_ONLY);
+  } finally {
+    env.state.localizations.delete("SIPD.Quick.Unavailable");
+    env.state.localizations.delete("SIPD.Action.TokenImage");
+  }
+});
+
+test("a shortcut to a new scene uses the file name's grid", () => {
+  const { ACTIONS, QUICK_TARGETS } = __test__;
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.SCENE_BACKGROUND);
+  const decision = __test__.buildQuickDecision(QUICK_TARGETS.DEFAULT, { grid: { size: 140, columns: 30, rows: 20 } });
+  assert.equal(decision.action, ACTIONS.SCENE_BACKGROUND);
+  assert.deepEqual(decision.grid, { type: 1, size: 140, columns: 30 });
+  assert.equal(decision.activateScene, true);
+  assert.equal(decision.optimize, true);
+  assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT).grid, null);
+});
+
+test("drops onto Foundry's file browser are left to its upload", async () => {
+  const fileList = new TestHTMLElement();
+  fileList.setClosest((selector) => (selector === "section[data-files]" ? fileList : null));
+  const file = new File(["v"], "cave.webm", { type: "video/webm" });
+  const event = {
+    target: fileList,
+    dataTransfer: { files: [file], items: [{ kind: "file", type: "video/webm", getAsFile: () => file }], types: ["Files"], getData: () => "" },
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {}
+  };
+  __test__.onDragOver(event);
+  await __test__.onDrop(event);
+  assert.equal(event.prevented, undefined);
+  assert.equal(env.state.lastDialogOptions, null);
+});
+
+test("a waiting shortcut takes a drop although drops are switched off", async () => {
+  setSetting(__test__.ENABLE_DROP_SETTING, false);
+  env.state.uploadResponse = { path: "shared.png" };
+  const file = createImageFile("drop.png");
+  const event = {
+    target: new TestHTMLElement(),
+    dataTransfer: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }], types: ["Files"], getData: () => "" },
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {}
+  };
+  __test__.onDragOver(event);
+  assert.equal(event.prevented, undefined);
+  __test__.armQuickTarget(__test__.QUICK_TARGETS.SHARE);
+  __test__.onDragOver(event);
+  assert.equal(event.prevented, true);
+  await __test__.onDrop(event);
+  assert.equal(env.state.showImageCalls.length, 1);
+  assert.equal(env.state.lastDialogOptions, null);
+});
+
+test("links with a generic or detailed content type still count by their extension", async () => {
+  assert.equal(__test__.isSupportedMediaType("video/mp4; codecs=avc1"), true);
+  assert.equal(__test__.isVideoType("Video/WebM;codecs=vp9"), true);
+  env.state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["v"], { type: "application/octet-stream" }) });
+  const video = await __test__.fetchDroppedImage("https://cdn.test/maps/River%2016x9.webm?sig=1");
+  assert.equal(video.type, "video/webm");
+  assert.equal(video.name, "River%2016x9.webm");
+  env.state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["v"], { type: "video/mp4; codecs=avc1" }) });
+  assert.equal((await __test__.fetchDroppedImage("https://cdn.test/falls")).type, "video/mp4");
+  env.state.fetchImpl = async () => ({ ok: true, blob: async () => new Blob(["<html>"], { type: "text/html" }) });
+  assert.equal(await __test__.fetchDroppedImage("https://cdn.test/page"), null);
+});
+
+test("a paste while the shortcut still reads the clipboard takes the target once", async () => {
+  const { QUICK_TARGETS } = __test__;
+  env.state.uploadResponse = { path: "shared.png" };
+  let release;
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const secureDescriptor = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext");
+  Object.defineProperty(globalThis, "isSecureContext", { value: true, configurable: true, writable: true });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: { clipboard: {
+    read: () => new Promise((resolve) => {
+      release = () => resolve([clipboardItem("image/png", "png")]);
+    })
+  } } });
+  try {
+    const reading = __test__.quickInsertFromClipboard(QUICK_TARGETS.SHARE);
+    // Chrome asks for permission, the user presses Ctrl+V meanwhile
+    assert.equal(__test__.hasArmedQuickTarget(), true);
+    await __test__.onPaste(createPasteEvent("", { file: createImageFile("pasted.png") }));
+    assert.equal(env.state.showImageCalls.length, 1);
+    release();
+    await reading;
+    assert.equal(env.state.showImageCalls.length, 1);
+    assert.equal(env.state.lastDialogOptions, null);
+  } finally {
+    if ( navigatorDescriptor ) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else delete globalThis.navigator;
+    if ( secureDescriptor ) Object.defineProperty(globalThis, "isSecureContext", secureDescriptor);
+    else delete globalThis.isSecureContext;
+  }
+});
+
+test("a file copied in the file manager waits for the paste instead of taking its icon", async () => {
+  assert.equal(__test__.isCopiedFileName("Tavern 30x20.webp"), true);
+  assert.equal(__test__.isCopiedFileName("/Users/gm/Maps/Tavern.png"), true);
+  assert.equal(__test__.isCopiedFileName("C:\\Maps\\River.webm"), true);
+  assert.equal(__test__.isCopiedFileName("https://cdn.test/map.png"), false);
+  assert.equal(__test__.isCopiedFileName("two\nlines.png"), false);
+  assert.equal(__test__.isCopiedFileName("notes.txt"), false);
+  assert.equal(__test__.isCopiedFileName(""), false);
+
+  const icon = { types: ["text/plain", "image/png"], getType: async (type) => new Blob([type === "text/plain" ? "Tavern 30x20.png" : "icon"], { type }) };
+  const restore = stubClipboard([icon]);
+  try {
+    assert.deepEqual(await __test__.readClipboardSources(), []);
+    await __test__.quickInsertFromClipboard(__test__.QUICK_TARGETS.DEFAULT);
+    assert.equal(__test__.takeArmedQuickTarget(), __test__.QUICK_TARGETS.DEFAULT);
+  } finally {
+    restore();
+  }
+  // A copied web image with its address as text is an image
+  const copied = { types: ["text/plain", "image/png"], getType: async (type) => new Blob([type === "text/plain" ? "https://cdn.test/a.png" : "png"], { type }) };
+  const restoreCopied = stubClipboard([copied]);
+  try {
+    assert.equal((await __test__.readClipboardSources()).length, 1);
+  } finally {
+    restoreCopied();
+  }
+});
+
+test("Alt+V gives way like the dialog when the remembered target is not allowed at all", () => {
+  const { ACTIONS, QUICK_TARGETS } = __test__;
+  // A player whose remembered target is the current scene background, which players never get
+  enablePlayerTargets(ACTIONS.CHAT_IMAGE);
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.SCENE_BACKGROUND_CURRENT);
+  setSetting(__test__.DEFAULT_ACTION_SETTING, ACTIONS.SCENE_BACKGROUND_CURRENT);
+  assert.equal(__test__.getQuickAction(QUICK_TARGETS.DEFAULT), __test__.getDialogDefaults().action);
+  assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT)?.action, __test__.getDialogDefaults().action);
+
+  // A GM's remembered token target without a selected token stays and opens the dialog
+  env.reset();
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.TOKEN_IMAGE);
+  assert.equal(__test__.getQuickAction(QUICK_TARGETS.DEFAULT), ACTIONS.TOKEN_IMAGE);
+  assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT), null);
+  // A portrait for a video is not possible, the shortcut does not switch to another target
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.ACTOR_PORTRAIT);
+  assert.equal(__test__.getQuickAction(QUICK_TARGETS.DEFAULT, { video: true }), ACTIONS.ACTOR_PORTRAIT);
+  assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT, { video: true }), null);
+});
+
+test("a batch left with one image keeps the waiting shortcut and the file name's grid", async () => {
+  const { ACTIONS, QUICK_TARGETS } = __test__;
+  env.state.imageBehavior = { width: 3000, height: 2000, error: false, failSources: ["blob:2"] };
+  env.state.uploadResponse = { path: "maps/tavern.png" };
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.SCENE_BACKGROUND);
+  setSetting(__test__.DEFAULT_ACTIVATE_SCENE_SETTING, false);
+  await __test__.handleImportedBatch([createImageFile("Tavern 30 x 20.png", "image/png", "one"), createImageFile("broken.png", "image/png", "two")],
+    { quickTarget: QUICK_TARGETS.DEFAULT });
+  assert.equal(env.state.lastDialogOptions, null);
+  assert.deepEqual(env.state.sceneCreates[0].grid, { type: 1, size: 100 });
+});
+
+test("the grid fields lead with the field typed in last and warn below the minimum", () => {
+  env.state.localizations.set("SIPD.Dialog.GridMinimum", "At least {min} px.");
+  try {
+    const { form, hint } = createGridForm({ size: "100", columns: "30" });
+    const lead = new TestHTMLElement();
+    lead.value = "size";
+    form.elements.gridLead = lead;
+    __test__.bindGridFields(form, { width: 3000, height: 2000 });
+    form.elements.gridColumns.value = "29.5";
+    form.elements.gridColumns.dispatch("input");
+    assert.equal(lead.value, "columns");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 1, size: 102, columns: 29.5 });
+    form.elements.gridSize.value = "12";
+    form.elements.gridSize.dispatch("input");
+    assert.equal(lead.value, "size");
+    assert.equal(hint.textContent, "At least 20 px.");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 1, size: 12 });
+    // Squares only lead on a square grid
+    form.elements.gridColumns.dispatch("input");
+    assert.equal(lead.value, "columns");
+    form.elements.gridType.value = "2";
+    assert.deepEqual(__test__.readGridChoice(form), { type: 2, size: 102 });
+    // Detected squares start in the lead
+    assert.match(__test__.gridFieldsMarkup({ width: 3000, height: 2000, grid: { size: 100, columns: 30 } }), /name="gridLead" value="columns"/);
+    assert.match(__test__.gridFieldsMarkup({ width: 3000, height: 2000, grid: { size: 140 } }), /name="gridLead" value="size"/);
+  } finally {
+    env.state.localizations.delete("SIPD.Dialog.GridMinimum");
+  }
+});
+
+test("Cancel in the dialog imports nothing and keeps the remembered target", async () => {
+  // DialogV2.wait answers the Cancel button, which has no callback, with its action name
+  env.state.dialogWaitResult = "cancel";
+  env.canvas.ready = true;
+  env.canvas.scene = createBatchScene();
+  await __test__.handleImportedImage(createImageFile("Cancelled.png"));
+  assert.equal(env.state.imagePopouts.length, 0);
+  assert.equal(env.state.uploadCalls.length, 0);
+  assert.equal(env.state.settingWrites.some((entry) => entry.key === __test__.LAST_ACTION_SETTING), false);
+  assert.equal(__test__.normalizeActionDecision("cancel"), null);
+  assert.equal(__test__.normalizeBatchDecision("cancel"), null);
+});
+
+test("uploads get the same file name on plain HTTP pages without crypto.subtle", async () => {
+  const file = createImageFile("map.png", "image/png", "map bytes");
+  const secure = await __test__.hashFileContent(file);
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { value: {}, configurable: true, writable: true });
+  try {
+    assert.equal(await __test__.hashFileContent(file), secure);
+    env.state.uploadResponse = { path: "uploaded.png" };
+    await __test__.uploadClipboardFile(file, { directory: "maps" });
+    assert.equal(env.state.uploadCalls[0].file.name, `${secure}.png`);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", descriptor);
+  }
+});
+
+test("a shortcut that fails reports the error, a clipboard that fails waits for the paste", async () => {
+  // The browser fails to hand out an item: the next paste gets the target
+  const broken = { types: ["image/png"], getType: async () => { throw new Error("clipboard gone"); } };
+  let restore = stubClipboard([broken]);
+  try {
+    assert.equal(await __test__.readClipboardSources(), null);
+    await __test__.quickInsertFromClipboard(__test__.QUICK_TARGETS.SHARE);
+    assert.equal(__test__.takeArmedQuickTarget(), __test__.QUICK_TARGETS.SHARE);
+  } finally {
+    restore();
+  }
+
+  // The import itself fails: an error notice, nothing waits
+  env.state.uploadResponse = { path: "" };
+  env.state.localizations.set("SIPD.Notification.Error", "Failed: {message}");
+  restore = stubClipboard([clipboardItem("image/png", "png")]);
+  try {
+    assert.equal(__test__.onQuickInsertKey(__test__.QUICK_TARGETS.SHARE), true);
+    for ( let i = 0; i < 6; i++ ) await flushPromises();
+    assert.deepEqual(env.state.notifications.error, ["Failed: upload failed"]);
+    assert.equal(__test__.hasArmedQuickTarget(), false);
+  } finally {
+    restore();
+    env.state.localizations.delete("SIPD.Notification.Error");
+  }
 });

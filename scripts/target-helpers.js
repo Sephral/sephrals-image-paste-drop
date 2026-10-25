@@ -9,6 +9,15 @@ const LEGACY_ROLL_MODES = Object.freeze({
 });
 const MESSAGE_MODES = Object.freeze(["public", "gm", "blind", "self", "ic"]);
 const GENERIC_FILE_NAMES = /^(image|blob|clipboard-image|unknown|untitled)(\s*\(\d+\))?$/i;
+// CONST.VIDEO_FILE_EXTENSIONS in v13 and v14
+const VIDEO_FILE_EXTENSIONS = Object.freeze(["m4v", "mp4", "ogv", "webm"]);
+
+// Whether a path or URL points to a video, judged by its extension like Foundry does. Query and hash do not count.
+function isVideoPath(path) {
+  const value = String(path ?? "").split(/[?#]/)[0];
+  const extension = /\.([a-z0-9]+)$/i.exec(value)?.[1]?.toLowerCase();
+  return Boolean(extension) && VIDEO_FILE_EXTENSIONS.includes(extension);
+}
 
 // Keeps a span inside a range. A span longer than the range stays centered on it.
 function clampSpan(start, length, rangeStart, rangeLength) {
@@ -117,8 +126,11 @@ function toLegacyRollMode(mode) {
   return LEGACY_ROLL_MODES[mode] ?? LEGACY_ROLL_MODES.public;
 }
 
+// Videos play muted in a loop, like an animated map on the canvas.
 function buildChatImageContent(images, escape) {
-  const markup = images.map(({path, name}) => `<img src="${escape(path)}" alt="${escape(name)}">`).join("");
+  const markup = images.map(({path, name}) => isVideoPath(path)
+    ? `<video src="${escape(path)}" aria-label="${escape(name)}" autoplay loop muted playsinline></video>`
+    : `<img src="${escape(path)}" alt="${escape(name)}">`).join("");
   return `<div class="sipd-chat-images">${markup}</div>`;
 }
 
@@ -146,6 +158,8 @@ function normalizeRecipientIds(ids, validIds) {
 export {
   LEGACY_ROLL_MODES,
   MESSAGE_MODES,
+  VIDEO_FILE_EXTENSIONS,
+  isVideoPath,
   clampSpan,
   layoutTileGrid,
   clampPointToRect,

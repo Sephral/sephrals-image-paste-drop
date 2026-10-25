@@ -14,6 +14,9 @@
 * **You decide what it becomes:** a new scene with the image as its background, the background or foreground of the current scene, a tile, a journal page, a map pin, a token image, an actor portrait, a chat post or a picture shown to all players or just the ones you pick.
 * **Several images at once:** drop a handful of files and turn them into one handout with a page each, a neat grid of tiles or a new scene per map.
 * **Tiles where you want them:** drop an image onto the map and the tile lands right there, snapped to the grid.
+* **Maps with the right grid:** a map named `Tavern 30x20` becomes a scene with a grid that fits. Or type the size of a square into the dialog.
+* **Animated maps too:** drop a WebM or MP4 video and it plays as scene background, tile, token or handout.
+* **One key and done:** Alt+V sends the copied image to your usual target, Alt+P shows it to your players at once.
 * **No file juggling:** the image is uploaded and filed away for you. No detour through the file picker, and the same image is never stored twice. Huge images can be shrunk and saved as WebP on the way.
 * **Image links too:** copy an image address in your browser and paste it. If the site blocks the download, you can still link the image directly.
 * **Players can join in:** let players show images, create handouts or give their own token a new look, with exactly the permissions you choose.

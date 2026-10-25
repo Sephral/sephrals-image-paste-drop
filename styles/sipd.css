@@ -216,7 +216,8 @@
   min-height: 12rem;
 }
 
-.sipd-dialog__preview img {
+.sipd-dialog__preview img,
+.sipd-dialog__preview video {
   display: block;
   width: 100%;
   min-height: 12rem;
@@ -268,6 +269,38 @@
   font-size: 0.68rem;
   line-height: 1.35;
   color: var(--sipd-muted);
+}
+
+/* Grid of a new scene: type, size of a square and squares across in one row */
+.sipd-grid-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  align-items: center;
+}
+
+.sipd-grid-fields select {
+  flex: 1 1 6rem;
+  min-width: 6rem;
+}
+
+.sipd-grid-number {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.3rem;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--sipd-muted);
+  white-space: nowrap;
+}
+
+.sipd-grid-number[hidden] {
+  display: none;
+}
+
+.sipd-grid-number input {
+  width: 4rem;
+  text-align: end;
 }
 
 .sipd-choice-stack {
@@ -344,6 +377,7 @@
 }
 
 .sipd-app input[type="text"],
+.sipd-app input[type="number"],
 .sipd-app select {
   border-radius: var(--sipd-radius-sm);
   border: 1px solid var(--sipd-line);
@@ -352,6 +386,7 @@
 }
 
 .sipd-app[data-ui-theme="foundry"] input[type="text"],
+.sipd-app[data-ui-theme="foundry"] input[type="number"],
 .sipd-app[data-ui-theme="foundry"] select {
   background: rgba(17, 18, 22, 0.78);
 }
@@ -364,6 +399,7 @@
 }
 
 .sipd-app input[type="text"]:focus-visible,
+.sipd-app input[type="number"]:focus-visible,
 .sipd-app select:focus-visible,
 .sipd-app input[type="checkbox"]:focus-visible,
 .sipd-app .window-content button:focus-visible,
@@ -464,7 +500,8 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
-.sipd-batch-thumb img {
+.sipd-batch-thumb img,
+.sipd-batch-thumb video {
   display: block;
   width: 100%;
   aspect-ratio: 1;
@@ -502,7 +539,8 @@
   font-weight: 700;
 }
 
-.sipd-batch-thumb figcaption .sipd-batch-thumb__optimized[hidden] {
+.sipd-batch-thumb figcaption .sipd-batch-thumb__optimized[hidden],
+.sipd-batch-thumb figcaption .sipd-batch-thumb__grid[hidden] {
   display: none;
 }
 
@@ -516,7 +554,8 @@
   gap: 0.35rem;
 }
 
-.sipd-chat-images img {
+.sipd-chat-images img,
+.sipd-chat-images video {
   display: block;
   max-width: 100%;
   height: auto;

@@ -115,3 +115,20 @@ test("pickDroppedUri finds the link of a drop and ignores dropped text", () => {
   assert.equal(helpers.pickDroppedUri({ html: "<div><img alt='x' src='https://a.test/i.png?a=1&amp;b=2'></div>" }), "https://a.test/i.png?a=1&b=2");
   assert.equal(helpers.pickDroppedUri({ html: "<img src=\"icons/local.png\">" }), null);
 });
+
+test("videos are told by their extension and play muted in a loop in chat", () => {
+  assert.equal(helpers.isVideoPath("worlds/w/maps/abc.webm"), true);
+  assert.equal(helpers.isVideoPath("https://cdn.test/river.MP4?token=1#t=2"), true);
+  assert.equal(helpers.isVideoPath("clip.m4v"), true);
+  assert.equal(helpers.isVideoPath("clip.ogv"), true);
+  assert.equal(helpers.isVideoPath("maps/abc.webp"), false);
+  assert.equal(helpers.isVideoPath("https://cdn.test/webm/map.png?format=webm"), false);
+  assert.equal(helpers.isVideoPath("blob:http://localhost/123"), false);
+  assert.equal(helpers.isVideoPath(null), false);
+
+  const escape = (value) => String(value).replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;");
+  assert.equal(
+    helpers.buildChatImageContent([{ path: "river.webm", name: "River" }, { path: "map.png", name: "Map" }], escape),
+    '<div class="sipd-chat-images"><video src="river.webm" aria-label="River" autoplay loop muted playsinline></video><img src="map.png" alt="Map"></div>'
+  );
+});

@@ -4,15 +4,18 @@ This manual covers the details. For a quick overview see the [README](README.md)
 
 ## What it reacts to
 
-* Pasted clipboard images and pasted image links outside of text inputs
-* Dropped image files and dropped image URLs outside of text inputs
+* Pasted clipboard images, videos and image links outside of text inputs
+* Dropped image and video files and dropped image URLs outside of text inputs
 * Several images at once: several pasted or dropped image files, several image links pasted one per line, or several links dropped together
+* Two keyboard shortcuts that skip the dialog (see [Keyboard shortcuts](#keyboard-shortcuts))
 
 After a paste or drop a preview dialog opens with your configured defaults. The image is uploaded when the chosen target needs a file. If the browser cannot download an image URL, the module offers to use the URL directly.
 
+Files dropped onto the file list of Foundry's file browser are left to Foundry, which uploads them into the folder you are browsing.
+
 ## Targets
 
-* Create a new scene and use the image as its background
+* Create a new scene and use the image as its background, with a grid that fits the map (see [Grid of new scenes](#grid-of-new-scenes))
 * Replace the background of the current scene
 * Replace the foreground overlay of the current scene, useful for map overlays and framing assets
 * Create a centered tile in the current scene, placed at the drop point when you drop the image onto the canvas
@@ -27,6 +30,27 @@ After a paste or drop a preview dialog opens with your configured defaults. The 
 * Upload the image into a folder of your choice (`Upload directory`)
 
 Scene, tile and map pin targets need a viewed scene. The token target needs at least one selected token, the portrait target a selected token or a character assigned to you. Targets that are not possible right now are greyed out in the dialog.
+
+## Grid of new scenes
+
+A new scene gets a grid that fits the map when the file name says how big the squares are:
+
+* `30x20`, `30 x 20`, `30×20` or `30_x_20`: the map is 30 squares wide and 20 squares high. The other order works too.
+* `140px` or `140ppi`: one square is 140 pixels.
+
+Squares only count when they fit the image, so a pixel size such as `4096x2048` is no grid. A name only counts with at least 5 squares on each side and at most 600 pixels per square, and aspect ratios such as `16x9` are ignored. Without a grid in the name the scene keeps Foundry's default of 100 pixels.
+
+With *Create a new scene* as target the dialog shows the row *Grid*: the grid type, the size of one square in pixels and, for square grids, how many squares the map is wide. Change one number and the other follows. The grid type starts with the default of your game system. Foundry needs at least 20 pixels per square, a smaller size is raised to 20. An empty size keeps Foundry's default.
+
+Foundry only takes whole pixels per square. When the squares of a map are not a whole number of pixels, for example 29.5 squares across 3000 pixels or a large map shrunk on upload (see [Smaller files](#smaller-files)), the scene is made a few pixels larger or smaller so that it holds exactly that many squares. Foundry stretches the map to the scene, so its grid stays on the squares drawn into the map.
+
+Several images as one new scene each take the grid from their own file names. Their thumbnails show it while that target is chosen.
+
+## Videos
+
+WebM, MP4 and OGV videos work like images. Paste or drop them and pick a target: an animated map becomes a scene background, a foreground overlay or a tile that plays in a loop, tokens can use a video as well, journal pages play it in a loop with controls, and chat posts play it muted in a loop. The actor portrait only takes images and stays greyed out for videos.
+
+Videos are uploaded as they are. Shrinking and WebP only apply to images. Links that end in `.webm`, `.mp4`, `.m4v` or `.ogv` are imported like image links. Other video formats such as MOV are left alone, Foundry cannot play them.
 
 ## Several images at once
 
@@ -91,6 +115,19 @@ When an upload would be shrunk or converted, the import dialog shows a checkbox 
 The dialog for several images has one checkbox for all of them. Its label names the size limit and the target format, its hint says how many of the images are affected, and each affected thumbnail shows its new size or format. Unchecked, every image of this batch is uploaded as it is.
 
 Scenes and tiles created from a shrunk image use its new size.
+
+## Keyboard shortcuts
+
+Two shortcuts skip the dialog:
+
+| Shortcut | What it does |
+| --- | --- |
+| `Alt+V` | Sends the copied image to the target the dialog would preselect, with the dialog's defaults |
+| `Alt+P` | Shows the copied image to all connected players |
+
+Change them under **Configure Controls**. The shortcuts read the clipboard themselves. Browsers only allow that on HTTPS pages, on `localhost` and in Foundry's desktop app, and the browser may ask for permission the first time. Everywhere else, and when the clipboard holds a copied file instead of an image, the shortcut waits ten seconds for the next `Ctrl+V` or drop and sends that image to its target.
+
+When the target is not possible right now, for example the token target without a selected token, the normal dialog opens. When the remembered target is one you may not use at all, `Alt+V` takes the target the dialog preselects instead. Several images at once always get the dialog for several images. A shortcut does not change the target the dialog reuses. Players can use the shortcuts with the targets the GM allows them.
 
 ## Player access
 

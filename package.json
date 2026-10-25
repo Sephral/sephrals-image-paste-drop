@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/sipd.js && node --check scripts/image-optimize.js && node --check scripts/target-helpers.js",
+    "check": "node --check scripts/sipd.js && node --check scripts/image-optimize.js && node --check scripts/target-helpers.js && node --check scripts/scene-grid.js && node --check scripts/sha256.js",
     "check:manifest": "node build/validate-manifest.mjs",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
