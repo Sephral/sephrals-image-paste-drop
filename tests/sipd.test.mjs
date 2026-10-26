@@ -92,9 +92,10 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 21 module settings and the hidden consent setting of the usage library
-  assert.equal(env.state.registerCalls.length, 22);
+  // 21 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 23);
   assert.equal(env.state.registerCalls.find((entry) => entry.key === "usage").data.config, false);
+  assert.equal(env.state.registerCalls.find((entry) => entry.key === "usageState").data.config, false);
   const maxSize = env.state.registerCalls.find((entry) => entry.key === __test__.MAX_IMAGE_SIZE_SETTING);
   assert.equal(maxSize.data.default, 0);
   assert.deepEqual(Object.keys(maxSize.data.choices), ["0", "2048", "4096", "8192"]);

@@ -4,9 +4,9 @@
  * Every module carries an identical copy as scripts/usage.mjs. Never change one copy alone: all copies stay the same,
  * and every change raises LIB_VERSION.
  *
- * Only the active GM's browser sends, at most once a day, one ping for all Sephral modules of the world, and only after
- * the GM agreed. Nothing here may disturb a module: every entry point catches its own errors, nothing is awaited by the
- * caller, and an unreachable server only costs one failed request followed by a growing pause.
+ * Only the active GM's browser sends, at most once a UTC day, one ping for all Sephral modules of the world, and only
+ * after the GM agreed. Nothing here may disturb a module: every entry point catches its own errors, nothing is awaited
+ * by the caller, and an unreachable server only costs one failed request followed by a growing pause.
  */
 
 /* -------------------------------------------- */
@@ -14,7 +14,7 @@
 /* -------------------------------------------- */
 
 /** Version of this file. Raise it with every change; the newest copy in a world runs for all modules. */
-export const LIB_VERSION = 3;
+export const LIB_VERSION = 4;
 
 /** Version of the ping format ("v"). Raise it only for breaking changes; the server keeps a parser per version. */
 export const FORMAT_VERSION = 1;
@@ -24,6 +24,9 @@ export const CONSENT_VERSION = 1;
 
 /** Layout of the browser state. A different stored version is migrated or started fresh. */
 const STATE_VERSION = 1;
+
+/** The first library version that keeps the state in the world too (setting "usageState" of its modules). */
+const WORLD_STATE_LIB = 4;
 
 /**
  * Whether this copy may run at all. Switched off, nothing is shown, asked, counted or sent. Libraries 1 and 2 shipped
@@ -45,17 +48,32 @@ const OPTOUT_KEY = "sephral-usage-optout";
 const DEBUG_KEY = "sephral-usage-debug";
 const STATE_KEY = "sephral-usage";
 
+/** Hidden world setting with the shared state, in the modules that carry a copy of WORLD_STATE_LIB or newer. */
+const STATE_SETTING = "usageState";
+
 /** Third-party modules a ping may name. Keep in sync with the list on the server. */
 const INTEGRATIONS = ["dice-so-nice", "ember", "item-piles", "lib-wrapper", "midi-qol", "ready-set-roll-5e",
   "seasons-and-stars", "socketlib", "tidy5e-sheet"];
 
 const WINDOW_DAYS = 30;
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 const HOUR_S = 3600;
 const MAX_ERRORS = 5;
 
-/** Delays in ms. Tests set them to 0. */
-const TIMING = {askDelay: 20_000, pingDelay: [60_000, 120_000], saveDelay: 3_000, timeout: 5_000};
+/** Largest body a keepalive request may carry (browsers allow 64 KiB in flight). */
+const KEEPALIVE_BYTES = 60_000;
+
+/**
+ * Delays in ms. Tests set them to 0.
+ * - pingDelay: after ready for the first ping of a world, and when an earlier session ended before its ping went out
+ * - lateDelay: otherwise, so the ping includes the first part of the running session; leaving the page sends earlier
+ * - tick: how often an open world checks whether a new UTC day made a ping due
+ * - worldSaveDelay: least time between two writes of the world state while counting. Short on purpose: a write while
+ *   the page goes away does not reach the Foundry server (tested live), so the world must not wait for the end.
+ */
+const TIMING = {askDelay: 20_000, pingDelay: [10_000, 30_000], lateDelay: 30 * 60_000, tick: HOUR_MS, saveDelay: 3_000,
+  worldSaveDelay: 60_000, timeout: 5_000};
 
 /** Shared by every copy of this file in the page. */
 const REGISTRY = Symbol.for("sephral.usage");
@@ -116,7 +134,9 @@ export function markUsed(id) {
  * - Module records keep {id, lib, features: Set, settings: string[]}. The active copy reads records of older copies.
  * - LIBRARY keeps {version, active, start, count, openPanel, processErrors, text} with these arguments. Only added to.
  * - startOnce picks the highest version, so the active copy is never older than a record it reads.
- * - Error entries stay {stack, type}. The consent setting stays "usage" with {answer, version, id, decidedAt, asked}.
+ * - Error entries stay {stack, type}. The consent setting stays "usage" with {answer, version, id, decidedAt, asked},
+ *   since lib 4 also world (the world folder the id belongs to). The setting "usageState" (lib 4) holds a state in the
+ *   layout of the browser state.
  * A newer copy may work completely differently inside: it only has to serve older copies through these methods and
  * records, as an adapter if need be. Calls into another copy go through quiet(), so even a broken copy can only cost
  * the statistics, never disturb a module.
@@ -178,11 +198,12 @@ function installErrorCapture(reg) {
 /* -------------------------------------------- */
 
 /**
- * The hidden consent setting at init. The menu once the language is known, and only when a switched-on copy is in the
- * page; its texts come from the newest such copy.
+ * The hidden consent and world state settings at init. The menu once the language is known, and only when a
+ * switched-on copy is in the page; its texts come from the newest such copy.
  */
 function registerSettings(id) {
   safe(() => game.settings.register(id, "usage", {scope: "world", config: false, type: Object, default: {}}));
+  safe(() => game.settings.register(id, STATE_SETTING, {scope: "world", config: false, type: Object, default: {}}));
   Hooks.once("i18nInit", () => safe(() => {
     const on = registry().libraries.filter(lib => lib?.active);
     if ( !on.length ) return;
@@ -253,7 +274,12 @@ function testOverride() {
 /*  Start                                       */
 /* -------------------------------------------- */
 
-const run = {state: null, saveTimer: null, recording: false};
+/**
+ * State of this page. id: the world id to send when it was just renewed for a copied world and the consent setting
+ * may not be stored yet. skipWorld: ignore the world state until the copy of the original's state is cleared.
+ */
+const run = {state: null, saveTimer: null, recording: false, reg: null, sendTimer: null, tickTimer: null,
+  worldTimer: null, sending: false, worldSaved: null, worldSavedAt: 0, id: null, skipWorld: false};
 
 function start(reg) {
   if ( !LIBRARY.active ) return discard(reg);
@@ -268,14 +294,34 @@ function start(reg) {
   const action = consentAction(consent);
   debug(`consent ${consent.answer ?? "open"} v${consent.version ?? 0}, action ${action}`);
   if ( action === "send" ) {
-    beginRecording(reg);
-    schedulePing(reg);
+    const copied = claimWorld(reg, consent);
+    beginRecording(reg, {fresh: copied});
+    planPing(reg);
   }
   else {
     discard(reg);
-    if ( action === "off" ) stopRecording();
+    if ( action === "off" ) stopRecording(reg);
     if ( action === "ask" ) setTimeout(() => ask(reg).catch(err => debug("ask failed", err)), TIMING.askDelay);
   }
+}
+
+/**
+ * Bind the world id to this world folder. A copied world brings the consent of its original along: it keeps the
+ * decision but gets a new id and starts without the original's counts. A record from before lib 4 adopts the folder.
+ * @returns {boolean}   Whether this world is a copy
+ */
+function claimWorld(reg, consent) {
+  const folder = String(game.world?.id ?? "");
+  if ( !folder || (consent.world === folder) ) return false;
+  const copied = !!consent.world;
+  const next = {...consent, world: folder};
+  if ( copied ) {
+    next.id = randomId();
+    run.id = next.id;
+    debug("copied world, new id");
+  }
+  writeConsent(reg, next).catch(err => debug("could not bind the world id", err));
+  return copied;
 }
 
 /** Nothing is recorded without consent: drop what was queued before the decision. */
@@ -284,21 +330,39 @@ function discard(reg) {
   reg.errors.length = 0;
 }
 
-function beginRecording(reg) {
+/**
+ * Start counting on top of what this browser and the world already hold, so all GM browsers of a world count together.
+ * @param {object} reg
+ * @param {object} [options]
+ * @param {boolean} [options.fresh]   A copied world: leave out the world state, it belongs to the original
+ */
+function beginRecording(reg, {fresh = false} = {}) {
   if ( run.recording ) return;
   run.recording = true;
-  run.state = loadState();
+  run.reg = reg;
+  if ( fresh ) {
+    run.skipWorld = true;
+    clearWorldState(reg).finally(() => { run.skipWorld = false; });
+  }
+  run.state = mergeStates(loadState(), ...readWorldStates(reg));
   dayEntry(run.state, today()).s = 1;
   for ( const [method, args] of reg.pending.splice(0) ) safe(() => LIBRARY[method]?.(reg, ...args));
   processErrors(reg);
-  globalThis.addEventListener?.("pagehide", () => saveState());
+  globalThis.addEventListener?.("pagehide", () => safe(() => leave(reg)));
+  run.tickTimer = setInterval(() => safe(() => tick(reg)), TIMING.tick);
+  run.tickTimer?.unref?.();
   scheduleSave();
 }
 
-function stopRecording() {
+function stopRecording(reg) {
   run.recording = false;
   run.state = null;
+  clearTimeout(run.sendTimer);
+  clearTimeout(run.worldTimer);
+  clearInterval(run.tickTimer);
+  Object.assign(run, {sendTimer: null, worldTimer: null, tickTimer: null, worldSaved: null});
   storageRemove(stateKey());
+  clearWorldState(reg).catch(err => debug("could not clear the world state", err));
 }
 
 /* -------------------------------------------- */
@@ -387,13 +451,16 @@ async function question(renewal) {
 /** Store the decision in every module. Only the active GM's browser records and sends. */
 async function decide(reg, answer) {
   const consent = readConsent(reg);
+  const folder = String(game.world?.id ?? "");
+  const ownId = !consent.world || (consent.world === folder) ? consent.id : null;
   const next = {answer, version: CONSENT_VERSION, decidedAt: Date.now(), asked: consent.asked ?? 0,
-    id: answer === "yes" ? (consent.id ?? randomId()) : null};
+    id: answer === "yes" ? (ownId ?? randomId()) : null, world: folder};
+  run.id = null;
   await writeConsent(reg, next);
-  if ( answer !== "yes" ) return stopRecording();
+  if ( answer !== "yes" ) return stopRecording(reg);
   if ( !game.user?.isActiveGM || optOutReason() ) return;
   beginRecording(reg);
-  schedulePing(reg);
+  planPing(reg);
 }
 
 /** Turn on (after the question) or off. */
@@ -487,61 +554,120 @@ function askContent(renewal) {
 /*  Ping                                        */
 /* -------------------------------------------- */
 
-function schedulePing(reg) {
-  const [min, max] = TIMING.pingDelay;
-  setTimeout(() => sendPing(reg).catch(err => debug("ping failed", err)), min + (Math.random() * (max - min)));
+/**
+ * Plan the ping of this session. Worlds often run only briefly, so a due ping must never depend on a long session:
+ * - It waits lateDelay to cover the start of the session, but leaving the page sends it at once (leave).
+ * - It goes out after pingDelay when the world never sent, or when an earlier session ended before its ping went out
+ *   (the page was killed without pagehide). pendingSince marks that a ping is waiting.
+ * - An open world checks every tick, for a new UTC day or after a pause.
+ */
+function planPing(reg) {
+  const state = run.state;
+  if ( !state || !isDue(state) || run.sendTimer ) return;
+  const early = !state.attemptAt || !!state.pendingSince;
+  if ( !early ) {
+    state.pendingSince = Date.now();
+    saveState();
+  }
+  const [min, max] = early ? TIMING.pingDelay : [TIMING.lateDelay, TIMING.lateDelay];
+  run.sendTimer = setTimeout(() => {
+    run.sendTimer = null;
+    sendPing(reg).catch(err => debug("ping failed", err));
+  }, min + (Math.random() * (max - min)));
+  run.sendTimer?.unref?.();
 }
 
-async function sendPing(reg) {
-  const state = run.state;
-  if ( !state || !run.recording ) return;
+function tick(reg) {
+  if ( run.recording && !run.sendTimer && !run.sending ) sendPing(reg).catch(err => debug("ping failed", err));
+}
+
+/** Leaving the page: send a due ping with a request that outlives the page, and save. */
+function leave(reg) {
+  if ( !run.recording ) return;
+  if ( !run.sending ) sendPing(reg, {keepalive: true}).catch(err => debug("ping failed", err));
+  saveState({world: true});
+}
+
+/** No ping yet on this UTC day (or the pause after a failure is over), and the server did not stop this version. */
+function isDue(state, now = Date.now()) {
+  return ((state.stoppedLib ?? 0) < LIB_VERSION) && (now >= (state.nextTry ?? 0));
+}
+
+/**
+ * Send the ping if it is due. Everything up to the request runs synchronously, so pagehide can still send it.
+ * @param {object} reg
+ * @param {object} [options]
+ * @param {boolean} [options.keepalive]   The page is going away: nobody waits for the answer, it counts as delivered
+ */
+async function sendPing(reg, {keepalive = false} = {}) {
+  if ( !run.state || !run.recording || run.sending ) return;
+  // Another tab or GM browser may have sent since this page started
+  run.state = mergeStates(run.state, loadState(), ...readWorldStates(reg));
   const now = Date.now();
-  if ( (state.stoppedLib ?? 0) >= LIB_VERSION ) return debug("stopped by the server");
-  if ( now < (state.nextTry ?? 0) ) return debug(`next ping after ${new Date(state.nextTry).toISOString()}`);
+  if ( (run.state.stoppedLib ?? 0) >= LIB_VERSION ) return debug("stopped by the server");
+  if ( !isDue(run.state, now) ) return debug(`next ping after ${new Date(run.state.nextTry).toISOString()}`);
   const consent = readConsent(reg);
-  if ( consentAction(consent) !== "send" || !consent.id ) return;
-  const payload = buildPayload(reg, state, consent.id);
+  const id = run.id ?? consent.id;
+  if ( consentAction(consent) !== "send" || !id ) return;
+  const payload = buildPayload(reg, run.state, id);
+  const body = JSON.stringify(payload);
   debug("sending", payload);
+  const request = {method: "POST", body, headers: {"Content-Type": "text/plain"}, credentials: "omit",
+    referrerPolicy: "no-referrer", redirect: "error", cache: "no-store"};
+  const endpoint = globalThis.SEPHRAL_USAGE_ENDPOINT || ENDPOINT;
+  if ( keepalive ) {
+    if ( body.length > KEEPALIVE_BYTES ) return;
+    // Not sendBeacon: it would send the address of the Foundry server as referrer
+    Promise.resolve(safe(() => fetch(endpoint, {...request, keepalive: true}))).catch(err => debug("ping not delivered", err));
+    Object.assign(run.state, nextAttempt(run.state, {}, now));
+    delete run.state.pendingSince;
+    return;
+  }
+  run.sending = true;
   let answer = null;
   try {
     const signal = globalThis.AbortSignal?.timeout ? AbortSignal.timeout(TIMING.timeout) : undefined;
-    const response = await fetch(globalThis.SEPHRAL_USAGE_ENDPOINT || ENDPOINT, {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: {"Content-Type": "text/plain"},
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      redirect: "error",
-      cache: "no-store",
-      signal
-    });
+    const response = await fetch(endpoint, {...request, signal});
     if ( !response.ok ) throw new Error(`HTTP ${response.status}`);
     answer = await response.json().catch(() => ({}));
   } catch (err) {
     answer = null;
     debug("ping not delivered", err);
+  } finally {
+    run.sending = false;
   }
-  Object.assign(state, nextAttempt(state, answer, Date.now()));
-  saveState();
+  if ( !run.state || !run.recording ) return;
+  Object.assign(run.state, nextAttempt(run.state, answer, Date.now()));
+  if ( answer !== null ) delete run.state.pendingSince;
+  saveState({world: true});
 }
 
 /**
  * When to try again after a ping. The server can only stop this library version or change the interval within bounds.
- * Other answer fields are ignored, so the server may add some without breaking released copies.
+ * A daily or shorter interval ends at the next UTC midnight: at most one ping a day, as the question says, but a group
+ * that starts at the same hour every day is never a few minutes too early. After a failure the pause grows from one
+ * hour to 30 days. Other answer fields are ignored, so the server may add some without breaking released copies.
  * @param {object} state                  Browser state (failures)
  * @param {object|null} answer            Parsed server answer, null after a failure
  * @param {number} now
- * @returns {{nextTry: number, failures: number, stoppedLib?: number}}
+ * @returns {{nextTry: number, failures: number, attemptAt: number, stoppedLib?: number}}
  */
 export function nextAttempt(state, answer, now) {
   if ( answer === null ) {
-    const failures = Math.min((state.failures ?? 0) + 1, 5);
-    return {failures, nextTry: now + (Math.min(2 ** failures, 30) * DAY_MS)};
+    const failures = Math.min((state.failures ?? 0) + 1, 7);
+    const pause = failures === 1 ? HOUR_MS : Math.min(2 ** (failures - 2), 30) * DAY_MS;
+    return {failures, nextTry: now + pause, attemptAt: now};
   }
-  if ( answer.stop === true ) return {failures: 0, nextTry: now + (30 * DAY_MS), stoppedLib: LIB_VERSION};
+  if ( answer.stop === true ) return {failures: 0, nextTry: now + (30 * DAY_MS), stoppedLib: LIB_VERSION, attemptAt: now};
   const seconds = Number(answer.next);
   const interval = Number.isFinite(seconds) ? Math.min(Math.max(seconds, HOUR_S), 90 * 86_400) : 86_400;
-  return {failures: 0, nextTry: now + (interval * 1000)};
+  return {failures: 0, nextTry: interval <= 86_400 ? nextMidnight(now) : now + (interval * 1000), attemptAt: now};
+}
+
+/** Start of the next UTC day. */
+function nextMidnight(now) {
+  const date = new Date(now);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
 }
 
 /**
@@ -656,7 +782,7 @@ export function migrateState(state) {
   if ( state.v > STATE_VERSION ) {
     const fresh = emptyState();
     if ( Number.isFinite(state.nextTry) ) fresh.nextTry = state.nextTry;
-    if ( Number.isInteger(state.failures) ) fresh.failures = Math.min(Math.max(state.failures, 0), 5);
+    if ( Number.isInteger(state.failures) ) fresh.failures = Math.min(Math.max(state.failures, 0), 7);
     return fresh;
   }
   // Future steps: if ( state.v === 1 ) { ...; state.v = 2; }
@@ -691,10 +817,118 @@ function scheduleSave() {
   }, TIMING.saveDelay);
 }
 
-function saveState() {
+/**
+ * Save to localStorage, and to the world: at once after a ping, otherwise at most every worldSaveDelay. Leaving the
+ * page tries a last write, but that one rarely arrives.
+ * @param {object} [options]
+ * @param {boolean} [options.world]   Write the world state now
+ */
+function saveState({world = false} = {}) {
   if ( !run.state || !run.recording ) return;
   pruneDays(run.state, today());
   storageSet(stateKey(), JSON.stringify(run.state));
+  if ( world ) saveWorldState(run.reg);
+  else if ( !run.worldTimer ) {
+    run.worldTimer = setTimeout(() => {
+      run.worldTimer = null;
+      saveWorldState(run.reg);
+    }, Math.max(0, run.worldSavedAt + TIMING.worldSaveDelay - Date.now()));
+    run.worldTimer?.unref?.();
+  }
+}
+
+/**
+ * Combine the states of several browsers and of the world. Counts keep the higher value: every browser counts on top of
+ * what it merged at its start, so the higher count already contains the lower one. Pause and failures come from the
+ * latest attempt. A waiting ping (pendingSince) only counts when no attempt came after it.
+ * @param {...object} states
+ * @returns {object}
+ */
+export function mergeStates(...states) {
+  const merged = emptyState();
+  let latest = null;
+  const waiting = [];
+  for ( const state of states.map(migrateState) ) {
+    for ( const [day, entry] of Object.entries(state.days) ) {
+      if ( entry && (typeof entry === "object") ) mergeDay(merged.days[day] ??= {}, entry);
+    }
+    merged.stoppedLib = Math.max(merged.stoppedLib, Number(state.stoppedLib) || 0);
+    if ( Number.isFinite(state.pendingSince) ) waiting.push(state.pendingSince);
+    const at = Number(state.attemptAt) || 0;
+    const best = Number(latest?.attemptAt) || 0;
+    if ( !latest || (at > best) || ((at === best) && ((state.nextTry ?? 0) > (latest.nextTry ?? 0))) ) latest = state;
+  }
+  if ( latest ) {
+    merged.nextTry = Number(latest.nextTry) || 0;
+    merged.failures = Number(latest.failures) || 0;
+    if ( latest.attemptAt ) merged.attemptAt = latest.attemptAt;
+  }
+  const since = Math.min(...waiting);
+  if ( waiting.length && (since > (merged.attemptAt ?? 0)) ) merged.pendingSince = since;
+  return merged;
+}
+
+function mergeDay(target, entry) {
+  if ( entry.s ) target.s = 1;
+  for ( const [id, module] of Object.entries(entry.m ?? {}) ) {
+    if ( !module || (typeof module !== "object") ) continue;
+    target.m ??= {};
+    const into = target.m[id] ??= {};
+    if ( module.u ) into.u = 1;
+    for ( const field of ["f", "e"] ) {
+      for ( const [key, n] of Object.entries(module[field] ?? {}) ) {
+        if ( !Number.isFinite(n) ) continue;
+        into[field] ??= {};
+        into[field][key] = Math.max(into[field][key] ?? 0, n);
+      }
+    }
+  }
+}
+
+/* -------------------------------------------- */
+/*  World state                                 */
+/* -------------------------------------------- */
+
+/** Modules whose copy registers the world state setting, sorted. The first one holds the state. */
+function stateModules(reg) {
+  return [...(reg?.modules?.values() ?? [])].filter(module => (module.lib ?? 0) >= WORLD_STATE_LIB)
+    .map(module => module.id).sort();
+}
+
+/** The states stored in the world. Every module that ever held it is read, so a change of the first module loses nothing. */
+function readWorldStates(reg) {
+  if ( run.skipWorld ) return [];
+  return stateModules(reg).map(id => safe(() => game.settings.get(id, STATE_SETTING)))
+    .filter(value => value && (typeof value === "object") && (typeof value.v === "number"));
+}
+
+/** Only the active GM writes, only when the state changed, and never in a way that could disturb the module. */
+function saveWorldState(reg) {
+  if ( !run.state || !run.recording || run.skipWorld || !game.user?.isActiveGM ) return;
+  const [home] = stateModules(reg);
+  if ( !home ) return;
+  run.worldSavedAt = Date.now();
+  const value = JSON.stringify(run.state);
+  if ( value === run.worldSaved ) return;
+  run.worldSaved = value;
+  Promise.resolve(safe(() => game.settings.set(home, STATE_SETTING, JSON.parse(value))))
+    .catch(err => debug("could not store the world state", err));
+}
+
+/**
+ * Empty the world state in every module that holds one: after turning the statistics off, and in a copied world.
+ * @returns {Promise<void>}
+ */
+async function clearWorldState(reg) {
+  if ( !game.user?.isGM ) return;
+  for ( const id of stateModules(reg) ) {
+    try {
+      const value = game.settings.get(id, STATE_SETTING);
+      if ( value && (typeof value === "object") && Object.keys(value).length ) await game.settings.set(id, STATE_SETTING, {});
+    } catch (err) {
+      debug(`could not clear the world state of ${id}`, err);
+    }
+  }
 }
 
 /* -------------------------------------------- */
@@ -872,4 +1106,4 @@ function text(key) {
 /** Pure helpers and internals for the shared tests. Not part of the module API. */
 export const __test__ = {TIMING, registry, run, consentAction, readConsent, optOutReason, start, sendPing, decide,
   ask, count, decorateSettings, LIBRARY, stateKey, loadState, emptyState, TEXT, ENDPOINT, OPTOUT_MODULE, INTEGRATIONS,
-  randomId};
+  randomId, tick, leave, isDue, nextMidnight, readWorldStates, STATE_SETTING};
