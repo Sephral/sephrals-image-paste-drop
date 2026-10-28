@@ -35,6 +35,7 @@ import {
   withVersionQuery
 } from "./target-helpers.js";
 import {countFeature, registerUsage} from "./usage.mjs";
+import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
 
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
@@ -517,6 +518,20 @@ Hooks.once("init", () => {
     restricted: true
   });
 
+  registerDebugMenu(MODULE_ID, {
+    name: localize("SIPD.Debug.Title"),
+    label: localize("SIPD.Debug.Save"),
+    hint: localize("SIPD.Debug.Hint")
+  });
+  registerDebugProvider({
+    moduleId: MODULE_ID,
+    label: () => localize("SIPD.Debug.Entry"),
+    notice: file => localize("SIPD.Debug.Saved", {file}),
+    applies: message => String(message?.content ?? "").includes("sipd-chat-images"),
+    message: describeChatImages,
+    recent: describeDebugState
+  });
+
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers"],
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING]
@@ -564,7 +579,11 @@ function onRenderChatMessage(_message, html) {
 Hooks.once("ready", () => {
   void ensureModuleTranslationsLoaded().then(() => noticeNewVersions());
   const module = game.modules?.get?.(MODULE_ID);
-  if ( module ) module.api = {runSelfTest};
+  if ( module ) module.api = {
+    runSelfTest,
+    // One file for all of Sephral's modules, without a message id about their latest picture
+    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
+  };
   void ensurePlayerStorageDirectories();
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
@@ -3201,6 +3220,38 @@ async function checkIntegrations() {
   return {problems, checks};
 }
 
+// Image Paste & Drop's part of the debug file of Sephral's modules: where uploads go, what players may do, the browser
+// features that pasting needs (clipboard access only works in a secure context) and the shortcuts.
+function describeDebugState() {
+  const filePicker = getFilePickerClass();
+  const shortcuts = {};
+  for ( const name of ["quickInsert", "quickShare"] ) {
+    try {
+      shortcuts[name] = (game.keybindings?.get?.(MODULE_ID, name) ?? []).map(binding => [...(binding.modifiers ?? []), binding.key].join("+"));
+    } catch ( _error ) {
+      shortcuts[name] = null;
+    }
+  }
+  return {details: {
+    storage: {source: getStorageSource(), root: getRootedStoragePath(), forge: isForge()},
+    filePicker: {upload: typeof filePicker?.upload === "function", createDirectory: typeof filePicker?.createDirectory === "function"},
+    players: {
+      useTool: Boolean(getRegisteredSettingValue(ALLOW_PLAYER_TOOL_SETTING, false)),
+      actions: Array.from(getPlayerActionWhitelist()),
+      uploadRoles: game.permissions?.FILES_UPLOAD ?? null
+    },
+    browser: {secureContext: Boolean(globalThis.isSecureContext), clipboardRead: typeof globalThis.navigator?.clipboard?.read === "function"},
+    messageMode: getCurrentMessageMode(),
+    shortcuts
+  }};
+}
+
+// The images and videos of a chat message the module posted.
+function describeChatImages(message) {
+  const images = Array.from(String(message?.content ?? "").matchAll(/<(img|video)\b[^>]*\bsrc="([^"]*)"/g), ([, type, src]) => ({type, src}));
+  return {messageId: message?.id ?? null, images};
+}
+
 // Runs the self-test and reports the result as a notification and a whispered chat message.
 async function runSelfTest({report = true} = {}) {
   await ensureModuleTranslationsLoaded();
@@ -3239,6 +3290,8 @@ class SelfTestMenu extends foundry.applications.api.ApplicationV2 {
 }
 
 export const __test__ = {
+  describeChatImages,
+  describeDebugState,
   MODULE_ID,
   STORAGE_ROOT,
   ENABLE_PASTE_SETTING,

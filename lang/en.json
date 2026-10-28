@@ -163,5 +163,10 @@
   "SIPD.SelfTest.Targets": "Scenes, tiles, journals or the image popout are missing.",
   "SIPD.SelfTest.Texts": "The texts of the module are missing.",
   "SIPD.SelfTest.Webp": "This browser cannot create WebP images. Turn off the WebP conversion or use another browser.",
-  "SIPD.SelfTest.PlayerUpload": "Players may use the tool, but no player role may upload files. Allow uploads in Foundry's permission settings."
+  "SIPD.SelfTest.PlayerUpload": "Players may use the tool, but no player role may upload files. Allow uploads in Foundry's permission settings.",
+  "SIPD.Debug.Title": "Debug file",
+  "SIPD.Debug.Save": "Save debug file",
+  "SIPD.Debug.Hint": "Saves one file for bug reports about all of Sephral’s modules in this world: versions, settings and what the modules recorded, such as the latest chat messages they read. It contains chat text and whispers, check it before you share it.",
+  "SIPD.Debug.Entry": "Save Debug File (Sephral’s Modules)",
+  "SIPD.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it."
 }

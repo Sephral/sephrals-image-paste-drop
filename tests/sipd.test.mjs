@@ -102,6 +102,17 @@ test("registers all settings on init and event listeners on ready", async () => 
   assert.equal(env.state.registerCalls.find((entry) => entry.key === __test__.CONVERT_WEBP_SETTING).data.default, false);
   assert.equal(env.state.registerCalls.find((entry) => entry.key === __test__.WEBP_QUALITY_SETTING).data.default, 85);
   assert.equal(env.hooks.onHandlers.get("renderChatMessageHTML").length, 1);
+  // The debug file of Sephral's modules: the settings button and the part of this module for its image messages
+  const debugMenu = env.state.registerMenuCalls.find((entry) => entry.moduleId === __test__.MODULE_ID && entry.key === "debugFile");
+  assert.equal(debugMenu?.data.restricted, true);
+  const provider = globalThis.sephralsDebugFiles?.providers.get(__test__.MODULE_ID);
+  assert.equal(provider?.applies({ content: '<div class="sipd-chat-images"><img src="a.webp"></div>' }), true);
+  assert.equal(provider.applies({ content: "<p>hello</p>" }), false);
+  assert.deepEqual(__test__.describeChatImages({ id: "m1", content: '<div class="sipd-chat-images"><img src="a.webp" alt="A"><video src="b.webm" muted></video></div>' }),
+    { messageId: "m1", images: [{ type: "img", src: "a.webp" }, { type: "video", src: "b.webm" }] });
+  const { details } = __test__.describeDebugState();
+  assert.equal(details.storage.source, "data");
+  assert.deepEqual(Object.keys(details.shortcuts), ["quickInsert", "quickShare"]);
   const storageFolder = env.state.registerCalls.find((entry) => entry.key === __test__.STORAGE_FOLDER_SETTING);
   assert.equal(storageFolder.data.scope, "world");
   assert.equal(storageFolder.data.default, "");

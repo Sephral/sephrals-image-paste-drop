@@ -163,5 +163,10 @@
   "SIPD.SelfTest.Targets": "Szenen, Kacheln, Journale oder das Bildfenster fehlen.",
   "SIPD.SelfTest.Texts": "Die Texte des Moduls fehlen.",
   "SIPD.SelfTest.Webp": "Dieser Browser kann keine WebP-Bilder erstellen. Schalte die WebP-Umwandlung aus oder nutze einen anderen Browser.",
-  "SIPD.SelfTest.PlayerUpload": "Spieler dürfen das Werkzeug nutzen, aber keine Spielerrolle darf Dateien hochladen. Erlaube das Hochladen in Foundrys Berechtigungen."
+  "SIPD.SelfTest.PlayerUpload": "Spieler dürfen das Werkzeug nutzen, aber keine Spielerrolle darf Dateien hochladen. Erlaube das Hochladen in Foundrys Berechtigungen.",
+  "SIPD.Debug.Title": "Debug-Datei",
+  "SIPD.Debug.Save": "Debug-Datei speichern",
+  "SIPD.Debug.Hint": "Speichert eine Datei für Fehlerberichte über alle Module von Sephral in dieser Welt: Versionen, Einstellungen und was die Module aufgezeichnet haben, etwa die letzten Chatnachrichten, die sie gelesen haben. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
+  "SIPD.Debug.Entry": "Debug-Datei speichern (Sephral’s Module)",
+  "SIPD.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen."
 }

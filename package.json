@@ -1,10 +1,10 @@
 {
   "name": "sephrals-image-paste-drop",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/sipd.js && node --check scripts/image-optimize.js && node --check scripts/target-helpers.js && node --check scripts/scene-grid.js && node --check scripts/sha256.js",
+    "check": "node --check scripts/sipd.js && node --check scripts/image-optimize.js && node --check scripts/target-helpers.js && node --check scripts/scene-grid.js && node --check scripts/sha256.js && node --check scripts/debug-file.mjs",
     "check:manifest": "node build/validate-manifest.mjs",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
