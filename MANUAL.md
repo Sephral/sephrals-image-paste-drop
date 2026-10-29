@@ -6,10 +6,11 @@ This manual covers the details. For a quick overview see the [README](README.md)
 
 * Pasted clipboard images, videos and image links outside of text inputs
 * Dropped image and video files and dropped image URLs outside of text inputs
+* Drops and pastes onto a token, a tile or an open actor, item or journal sheet, which change that one (see [Drop onto a token, tile or sheet](#drop-onto-a-token-tile-or-sheet))
 * Several images at once: several pasted or dropped image files, several image links pasted one per line, or several links dropped together
 * Two keyboard shortcuts that skip the dialog (see [Keyboard shortcuts](#keyboard-shortcuts))
 
-After a paste or drop a preview dialog opens with your configured defaults. The image is uploaded when the chosen target needs a file. If the browser cannot download an image URL, the module offers to use the URL directly.
+While you drag an image over Foundry, a glow and a label show where it will land (see [Drop indicator](#drop-indicator)). After a paste or drop a preview dialog opens with your configured defaults. The image is uploaded when the chosen target needs a file. If the browser cannot download an image URL, the module offers to use the URL directly.
 
 Files dropped onto the file list of Foundry's file browser are left to Foundry, which uploads them into the folder you are browsing.
 
@@ -20,16 +21,53 @@ Files dropped onto the file list of Foundry's file browser are left to Foundry, 
 * Replace the foreground overlay of the current scene, useful for map overlays and framing assets
 * Create a centered tile in the current scene, placed at the drop point when you drop the image onto the canvas
 * Create a centered tile scaled to fit the current scene
+* Replace the image of the tile the image is dropped onto
 * Create a journal entry with an image page
+* Add an image page to the journal entry the image is dropped onto
 * Create a map pin: a journal entry with the image page and a pin on the current scene that opens it
 * Use the image for the selected tokens
 * Use the image as actor portrait
+* Use the image as image of the item the image is dropped onto
 * Post the image in chat
 * Show the image to connected players, to all of them or only to the ones you pick
 * Open the image in a preview window only
 * Upload the image into a folder of your choice (`Upload directory`)
 
-Scene, tile and map pin targets need a viewed scene. The token target needs at least one selected token, the portrait target a selected token or a character assigned to you. Targets that are not possible right now are greyed out in the dialog.
+Scene, tile and map pin targets need a viewed scene. The token target needs at least one selected token, the portrait target a selected token or a character assigned to you. Targets that are not possible right now are greyed out in the dialog. The tile image, item image and journal page targets only appear for a drop or paste onto their tile, item or journal entry, and they cannot be the default target.
+
+## Drop onto a token, tile or sheet
+
+Drop an image where it belongs and the dialog starts with the matching target, naming what it changes:
+
+| Dropped onto | Preselected target |
+| --- | --- |
+| a token on the canvas | its token image, also when other tokens are selected. A linked token also offers the portrait of its actor. |
+| a tile on the canvas (GM) | a new image for that tile. The tile keeps its place and size. |
+| an open actor sheet | the portrait of that actor |
+| an open item sheet | the image of that item |
+| an open journal entry | a new image page at the end, which the journal then shows. The name from the dialog becomes the page name. |
+| an empty spot on the canvas or anywhere else | your usual target, as before |
+
+You can still pick another target in the dialog. A target chosen because of where the image landed is not remembered as the target to start with next time.
+
+`Ctrl+V` works the same way: with the mouse over a token, a tile or an open sheet, the pasted image goes to that one. With the mouse over an empty spot on the canvas a paste keeps your usual target. `Alt+V` sends the copied image straight to the token, tile or sheet under the mouse without the dialog. `Alt+P` always shows the image to the players.
+
+Only tokens, actors, items and journal entries you may change count, and only tokens you can see on the canvas. On Foundry v14 that is the level you are viewing. Tokens on top of a tile win. While the tile controls are active, tiles win instead. Tiles that cover half of the scene or more, such as overlays and roofs, only count while the tile controls are active, so they do not catch every drop meant for an empty spot. Sheets you can only look at, and sheets from locked compendiums, keep the usual dialog. Portraits and item images only take images, so a video dropped onto an actor or item sheet gets your usual target.
+
+Several images at once always get the dialog for several images.
+
+## Drop indicator
+
+While you drag an image file or an image link over Foundry, the module shows where it will land:
+
+* a soft pulsing glow around the token or tile under the cursor
+* a glowing frame around the open actor, item or journal sheet under the cursor
+* on an empty spot of the canvas, a marker where a new tile or map pin would land, or an outline of the scene when the image would become its background or foreground
+* a label next to the cursor that names the target, for example *Token image* with the token's name, or your usual target with the note that the dialog can still change it
+
+The indicator follows the dialog theme. Text selections and Foundry's own drags, such as actors from the sidebar, get no indicator, and neither do files the module does not take, such as PDFs. It disappears when you drop, leave the window or stop dragging. *Show the drop target while dragging* turns it off.
+
+After the start, users who can upload images get a short tip about dropping onto tokens, tiles and sheets and about the two shortcuts. It comes back at every start until you click *Got it* or close it, then never again in this browser. Players only get it when the GM allows them a target for their own token or sheets.
 
 ## Grid of new scenes
 
@@ -122,7 +160,7 @@ Two shortcuts skip the dialog:
 
 | Shortcut | What it does |
 | --- | --- |
-| `Alt+V` | Sends the copied image to the target the dialog would preselect, with the dialog's defaults |
+| `Alt+V` | Sends the copied image to the token, tile or sheet under the mouse, else to the target the dialog would preselect, with the dialog's defaults |
 | `Alt+P` | Shows the copied image to all connected players |
 
 Change them under **Configure Controls**. The shortcuts read the clipboard themselves. Browsers only allow that on HTTPS pages, on `localhost` and in Foundry's desktop app, and the browser may ask for permission the first time. Everywhere else, and when the clipboard holds a copied file instead of an image, the shortcut waits ten seconds for the next `Ctrl+V` or drop and sends that image to its target.
@@ -145,8 +183,10 @@ Under `Additional player targets` the GM can open up more targets for players:
 | Image of the selected tokens | Upload Files |
 | Actor portrait | Upload Files |
 | Image post in chat | Upload Files |
+| Item image (drop onto an item sheet) | Upload Files |
+| Image page in an open journal entry | Upload Files. The player must own the journal entry. |
 
-Players only change tokens and portraits of actors they own. Tokens of other actors are left alone, even when they are selected.
+Players only change tokens and portraits of actors they own, and only items and journal entries they own. Tokens of other actors are left alone, even when they are selected or the image is dropped onto them. Replacing the image of a tile stays GM only.
 
 Foundry grants "Upload Files" only to Assistant GMs by default. Grant it to Players or Trusted Players under **Configure Permissions**. Assistant GM is no alternative when players should not see hidden journals and actors, because Foundry treats Assistant GMs like GMs.
 
@@ -164,6 +204,7 @@ Every user can configure on the module settings page:
 * the module language: follow Foundry (including community translations), English or German
 * whether clipboard paste triggers the module
 * whether drag and drop triggers the module
+* whether the drop target is shown while dragging
 * the default target
 * whether the last successful target is reused automatically (for single images and for batches separately)
 * whether player sharing is preselected
@@ -193,8 +234,9 @@ The module can take part in a small usage report shared by all of Sephral’s mo
 With the GM’s consent only the active GM’s browser counts, and it sends at most one report a day. The counts are kept in a hidden world setting, so all browsers and computers of the GM count together, and turning the statistics off deletes them. A copy of a world gets its own world ID. The question lists everything the report contains, from the Foundry version to a random world ID. For Image Paste & Drop it holds:
 
 * on how many of the last 30 days the module was used
-* how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, or are shown to the players or posted in the chat
-* the settings *Dialog theme*, *Allow players to use SIPD* and *Save uploads as WebP* (only the chosen option)
+* how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
+* how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
+* the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP* and *Show the drop target while dragging* (only the chosen option)
 * where errors occur in the module code: file, line and error type, never the error message
 
 No names, chat messages, notes, dice results or other content of the world are sent.

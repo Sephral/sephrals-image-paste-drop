@@ -12,6 +12,7 @@
 
 * **Paste or drop:** paste a screenshot or a copied image address with Ctrl+V, or drag an image file or a picture from your browser onto Foundry.
 * **You decide what it becomes:** a new scene with the image as its background, the background or foreground of the current scene, a tile, a journal page, a map pin, a token image, an actor portrait, a chat post or a picture shown to all players or just the ones you pick.
+* **Drop it where it belongs:** drop an image onto a token, a tile or an open sheet and it becomes that picture. A soft glow shows where it will land.
 * **Several images at once:** drop a handful of files and turn them into one handout with a page each, a neat grid of tiles or a new scene per map.
 * **Tiles where you want them:** drop an image onto the map and the tile lands right there, snapped to the grid.
 * **Maps with the right grid:** a map named `Tavern 30x20` becomes a scene with a grid that fits. Or type the size of a square into the dialog.

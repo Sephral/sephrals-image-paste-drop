@@ -92,8 +92,12 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 21 module settings and the hidden consent and state settings of the usage library
-  assert.equal(env.state.registerCalls.length, 23);
+  // 23 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 25);
+  const indicator = env.state.registerCalls.find((entry) => entry.key === __test__.DROP_INDICATOR_SETTING);
+  assert.equal(indicator.data.scope, "client");
+  assert.equal(indicator.data.default, true);
+  assert.equal(env.state.registerCalls.find((entry) => entry.key === __test__.DROP_TIP_SETTING).data.config, false);
   assert.equal(env.state.registerCalls.find((entry) => entry.key === "usage").data.config, false);
   assert.equal(env.state.registerCalls.find((entry) => entry.key === "usageState").data.config, false);
   const maxSize = env.state.registerCalls.find((entry) => entry.key === __test__.MAX_IMAGE_SIZE_SETTING);
@@ -138,7 +142,10 @@ test("registers all settings on init and event listeners on ready", async () => 
 
 test("action and theme choice helpers expose localized maps", () => {
   const actionChoices = __test__.getAllActionChoices();
-  assert.equal(actionChoices.length, 13);
+  assert.equal(actionChoices.length, 16);
+  // Targets that only exist for a drop onto their document cannot be the default target
+  for ( const action of __test__.CONTEXT_ACTIONS ) assert.equal(__test__.getActionSettingChoices()[action], undefined);
+  assert.equal(Object.keys(__test__.getActionSettingChoices()).length, 13);
   assert.equal(__test__.getActionSettingChoices()[__test__.ACTIONS.SHARE_IMAGE], "Share Image");
   assert.equal(__test__.getThemeSettingChoices()[__test__.UI_THEMES.FOUNDRY], "Foundry");
   assert.equal(__test__.localize("SIPD.Notification.Uploaded", { path: "abc" }), "uploaded abc");
@@ -788,13 +795,16 @@ test("player targets need the GM whitelist and the matching Foundry permissions"
   assert.equal(__test__.canUserShareImages(), false);
 
   env.state.filesUploadPermission = true;
-  const uploadTargets = [ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT, ACTIONS.CHAT_IMAGE, ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY];
+  // A page in a journal entry the player owns needs no permission to create journal entries
+  const uploadTargets = [ACTIONS.JOURNAL_PAGE, ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT, ACTIONS.ITEM_IMAGE, ACTIONS.CHAT_IMAGE,
+    ACTIONS.UPLOAD_DIRECTORY, ACTIONS.SHARE_IMAGE, ACTIONS.PREVIEW_ONLY];
   assert.deepEqual(__test__.getPermittedActions(), uploadTargets);
   env.state.permissions.JOURNAL_CREATE = true;
   assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ...uploadTargets]);
   assert.equal(__test__.canUserPerformAction(ACTIONS.SCENE_BACKGROUND), false);
   assert.equal(__test__.canUserPerformAction(ACTIONS.TILE_FIT), false);
   assert.equal(__test__.canUserPerformAction(ACTIONS.MAP_PIN), false);
+  assert.equal(__test__.canUserPerformAction(ACTIONS.TILE_IMAGE), false);
 
   setSetting(__test__.PLAYER_ACTIONS_SETTING, [ACTIONS.JOURNAL_IMAGE]);
   assert.deepEqual(__test__.getPermittedActions(), [ACTIONS.JOURNAL_IMAGE, ACTIONS.PREVIEW_ONLY]);
@@ -1040,8 +1050,10 @@ test("an image URL that cannot be downloaded can be linked for journal pages, sh
   env.canvas.scene = { id: "scene-1", name: "Scene One", constructor: { metadata: {} } };
 
   const remoteChoices = __test__.getActionChoices({ remoteUrl: true });
-  // Without a selected token or character the portrait target stays unavailable
-  assert.deepEqual(remoteChoices.filter((choice) => !choice.disabled).map((choice) => choice.value), __test__.REMOTE_URL_ACTIONS.filter((action) => action !== ACTIONS.ACTOR_PORTRAIT));
+  // Without a selected token or character the portrait target stays unavailable, item and journal page targets only
+  // exist for a drop onto an item or journal sheet
+  assert.deepEqual(remoteChoices.filter((choice) => !choice.disabled).map((choice) => choice.value),
+    __test__.REMOTE_URL_ACTIONS.filter((action) => (action !== ACTIONS.ACTOR_PORTRAIT) && !__test__.CONTEXT_ACTIONS.includes(action)));
   assert.equal(__test__.getActionChoices().find((choice) => choice.value === ACTIONS.TILE_CENTERED).disabled, false);
   assert.equal(__test__.getDialogDefaults({ remoteUrl: true }).action, ACTIONS.JOURNAL_IMAGE);
   assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TILE_CENTERED }, { remoteUrl: true }).action, ACTIONS.PREVIEW_ONLY);

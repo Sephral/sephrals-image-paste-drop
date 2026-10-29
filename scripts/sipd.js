@@ -34,6 +34,16 @@ import {
   toMessageMode,
   withVersionQuery
 } from "./target-helpers.js";
+import {
+  CONTEXT_KINDS,
+  SHEET_KINDS,
+  formatKeybinding,
+  isLeavingWindow,
+  pickCanvasHit,
+  readDragInfo,
+  toClientRect
+} from "./drop-context.js";
+import {DropIndicator} from "./drop-indicator.js";
 import {countFeature, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
 
@@ -60,6 +70,8 @@ const MAX_IMAGE_SIZE_SETTING = "maxImageSize";
 const CONVERT_WEBP_SETTING = "convertToWebp";
 const WEBP_QUALITY_SETTING = "webpQuality";
 const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
+const DROP_INDICATOR_SETTING = "dropIndicator";
+const DROP_TIP_SETTING = "dropTipDismissed";
 // The Foundry version the module was verified against (see the self-test).
 const TESTED_VERSIONS = Object.freeze({core: "14.369"});
 const MAX_IMAGE_SIZE_CHOICES = Object.freeze([0, 2048, 4096, 8192]);
@@ -86,15 +98,25 @@ const ACTIONS = {
   SCENE_FOREGROUND_CURRENT: "scene-foreground-current",
   TILE_CENTERED: "tile-centered",
   TILE_FIT: "tile-fit",
+  TILE_IMAGE: "tile-image",
   JOURNAL_IMAGE: "journal-image",
+  JOURNAL_PAGE: "journal-page",
   MAP_PIN: "map-pin",
   TOKEN_IMAGE: "token-image",
   ACTOR_PORTRAIT: "actor-portrait",
+  ITEM_IMAGE: "item-image",
   CHAT_IMAGE: "chat-image",
   UPLOAD_DIRECTORY: "upload-directory",
   SHARE_IMAGE: "share-image",
   PREVIEW_ONLY: "preview-only"
 };
+// Targets that change the tile, item or journal entry an image is dropped or pasted onto. The dialog only offers them
+// for such a drop, and they cannot be the default target.
+const CONTEXT_ACTIONS = Object.freeze([
+  ACTIONS.TILE_IMAGE,
+  ACTIONS.ITEM_IMAGE,
+  ACTIONS.JOURNAL_PAGE
+]);
 // Targets for several images at once that have no single-image counterpart
 const BATCH_ACTIONS = {
   JOURNAL_PAGES: "batch-journal-pages",
@@ -106,22 +128,26 @@ const CHAT_MODES = {
 };
 // Targets the GM can open up for players on top of the preview. Scene, tile and map pin targets stay GM-only,
 // because Foundry requires the Assistant role to create scenes, tiles and notes.
-// Token and portrait targets only touch tokens and actors the player owns.
+// Token, portrait, item and journal page targets only touch documents the player owns.
 const PLAYER_SELECTABLE_ACTIONS = Object.freeze([
   ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.JOURNAL_PAGE,
   ACTIONS.TOKEN_IMAGE,
   ACTIONS.ACTOR_PORTRAIT,
+  ACTIONS.ITEM_IMAGE,
   ACTIONS.CHAT_IMAGE,
   ACTIONS.UPLOAD_DIRECTORY,
   ACTIONS.SHARE_IMAGE
 ]);
 // Targets that can show a linked image the browser could not download. Foundry draws scene backgrounds,
 // tiles and tokens with WebGL, which needs the same cross-origin access the download lacked, and uploads need a copy.
-// Portraits, chat posts and map pins show the image in HTML (a map pin draws only its icon on the canvas).
+// Portraits, item images, chat posts and map pins show the image in HTML (a map pin draws only its icon on the canvas).
 const REMOTE_URL_ACTIONS = Object.freeze([
   ACTIONS.JOURNAL_IMAGE,
+  ACTIONS.JOURNAL_PAGE,
   ACTIONS.MAP_PIN,
   ACTIONS.ACTOR_PORTRAIT,
+  ACTIONS.ITEM_IMAGE,
   ACTIONS.CHAT_IMAGE,
   ACTIONS.SHARE_IMAGE,
   ACTIONS.PREVIEW_ONLY
@@ -142,17 +168,20 @@ const TARGET_USAGE_FEATURES = Object.freeze({
   [ACTIONS.SCENE_FOREGROUND_CURRENT]: "sceneImage",
   [ACTIONS.TILE_CENTERED]: "tileImage",
   [ACTIONS.TILE_FIT]: "tileImage",
+  [ACTIONS.TILE_IMAGE]: "tileImage",
   [BATCH_ACTIONS.TILE_GRID]: "tileImage",
   [ACTIONS.JOURNAL_IMAGE]: "journalImage",
+  [ACTIONS.JOURNAL_PAGE]: "journalImage",
   [BATCH_ACTIONS.JOURNAL_PAGES]: "journalImage",
   [ACTIONS.MAP_PIN]: "journalImage",
   [ACTIONS.TOKEN_IMAGE]: "tokenImage",
   [ACTIONS.ACTOR_PORTRAIT]: "tokenImage",
+  [ACTIONS.ITEM_IMAGE]: "itemImage",
   [ACTIONS.CHAT_IMAGE]: "showToPlayers",
   [ACTIONS.SHARE_IMAGE]: "showToPlayers"
 });
-// Actor portraits only take images. Foundry draws scenes, tiles and tokens from a video as well.
-const IMAGE_ONLY_ACTIONS = Object.freeze([ACTIONS.ACTOR_PORTRAIT]);
+// Portraits and item images only take images. Foundry draws scenes, tiles and tokens from a video as well.
+const IMAGE_ONLY_ACTIONS = Object.freeze([ACTIONS.ACTOR_PORTRAIT, ACTIONS.ITEM_IMAGE]);
 const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
 const MEDIA_URL_EXTENSIONS = Object.freeze([...IMAGE_URL_EXTENSIONS, ...VIDEO_FILE_EXTENSIONS]);
 // The video formats Foundry plays, with the extension an upload gets
@@ -206,10 +235,13 @@ function getAllActionChoices() {
     {value: ACTIONS.SCENE_FOREGROUND_CURRENT, label: localize("SIPD.Action.SceneForegroundCurrent")},
     {value: ACTIONS.TILE_CENTERED, label: localize("SIPD.Action.TileCentered")},
     {value: ACTIONS.TILE_FIT, label: localize("SIPD.Action.TileFit")},
+    {value: ACTIONS.TILE_IMAGE, label: localize("SIPD.Action.TileImage")},
     {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Action.JournalImage")},
+    {value: ACTIONS.JOURNAL_PAGE, label: localize("SIPD.Action.JournalPage")},
     {value: ACTIONS.MAP_PIN, label: localize("SIPD.Action.MapPin")},
     {value: ACTIONS.TOKEN_IMAGE, label: localize("SIPD.Action.TokenImage")},
     {value: ACTIONS.ACTOR_PORTRAIT, label: localize("SIPD.Action.ActorPortrait")},
+    {value: ACTIONS.ITEM_IMAGE, label: localize("SIPD.Action.ItemImage")},
     {value: ACTIONS.CHAT_IMAGE, label: localize("SIPD.Action.ChatImage")},
     {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Action.UploadDirectory")},
     {value: ACTIONS.SHARE_IMAGE, label: localize("SIPD.Action.ShareImage")},
@@ -217,8 +249,11 @@ function getAllActionChoices() {
   ];
 }
 
+// Targets that only exist for a drop onto their document cannot be the default target
 function getActionSettingChoices() {
-  return Object.fromEntries(getAllActionChoices().map(choice => [choice.value, choice.label]));
+  return Object.fromEntries(getAllActionChoices()
+    .filter(choice => !CONTEXT_ACTIONS.includes(choice.value))
+    .map(choice => [choice.value, choice.label]));
 }
 
 function getPlayerActionSettingChoices() {
@@ -343,6 +378,25 @@ Hooks.once("init", () => {
     hint: localize("SIPD.Settings.EnableDrop.Hint"),
     type: Boolean,
     default: true
+  });
+
+  game.settings.register(MODULE_ID, DROP_INDICATOR_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.DropIndicator.Label"),
+    hint: localize("SIPD.Settings.DropIndicator.Hint"),
+    type: Boolean,
+    default: true,
+    onChange: value => {
+      if ( !value ) DROP_INDICATOR?.hide();
+    }
+  });
+
+  game.settings.register(MODULE_ID, DROP_TIP_SETTING, {
+    scope: "client",
+    config: false,
+    type: Boolean,
+    default: false
   });
 
   game.settings.register(MODULE_ID, DEFAULT_ACTION_SETTING, {
@@ -533,8 +587,9 @@ Hooks.once("init", () => {
   });
 
   registerUsage(MODULE_ID, {
-    features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers"],
-    settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING]
+    features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
+      "contextImport", "itemImage", "dropIndicator"],
+    settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING]
   });
 
   registerQuickKeybindings();
@@ -588,7 +643,31 @@ Hooks.once("ready", () => {
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
   document.addEventListener("drop", onDrop, true);
+  document.addEventListener("dragleave", onDragLeave, true);
+  document.addEventListener("pointermove", trackPointer, {capture: true, passive: true});
+  document.documentElement?.addEventListener?.("pointerleave", forgetPointer);
+  globalThis.addEventListener?.("blur", () => DROP_INDICATOR?.hide());
+  void ensureModuleTranslationsLoaded().then(() => showDropTip());
 });
+
+// Pastes and shortcuts have no position of their own, they go to what is under the mouse.
+let LAST_POINTER = null;
+let DROP_INDICATOR = null;
+
+function trackPointer(event) {
+  LAST_POINTER = {x: event.clientX, y: event.clientY};
+}
+
+function forgetPointer() {
+  LAST_POINTER = null;
+}
+
+// The token, tile or open sheet under the mouse, for a paste. An empty spot on the board keeps the usual paste.
+function getPointerContext(media=null) {
+  if ( !LAST_POINTER ) return null;
+  const context = resolveContextAt(LAST_POINTER, {media});
+  return context?.kind === CONTEXT_KINDS.CANVAS ? null : context;
+}
 
 async function onPaste(event) {
   // A shortcut waiting for this paste works without the paste setting, it was pressed on purpose
@@ -609,32 +688,45 @@ async function onPaste(event) {
   event.stopPropagation();
   countFeature(MODULE_ID, "imagePaste");
   const quickTarget = takeArmedQuickTarget();
+  // A single image goes to the token, tile or sheet under the mouse
+  const context = (batch.length > 1) ? null : getPointerContext({video: clipboardImage ? isVideoFile(clipboardImage) : isVideoPath(imageUrl)});
 
   try {
     if ( batch.length > 1 ) await importImageBatch(batch, {quickTarget});
-    else await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl), {quickTarget});
+    else await importImage(async () => clipboardImage ?? fetchDroppedImage(imageUrl), {quickTarget, context});
   } catch (error) {
     console.error(`${MODULE_ID} | Paste handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
   }
 }
 
+// Whether SIPD takes a drag or a drop at this element
+function acceptsDrag(event) {
+  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) && !hasArmedQuickTarget() ) return false;
+  if ( isEditableTarget(event.target) || isFoundryDropZone(event.target) ) return false;
+  if ( !canCurrentUserUseTool() ) return false;
+  return hasTransferableImage(event.dataTransfer);
+}
+
 function onDragOver(event) {
-  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) && !hasArmedQuickTarget() ) return;
-  if ( isEditableTarget(event.target) || isFoundryDropZone(event.target) ) return;
-  if ( !canCurrentUserUseTool() ) return;
-  if ( !hasTransferableImage(event.dataTransfer) ) return;
+  if ( !acceptsDrag(event) ) {
+    DROP_INDICATOR?.hide();
+    return;
+  }
 
   event.preventDefault();
   if ( event.dataTransfer ) event.dataTransfer.dropEffect = "copy";
+  updateDropIndicator(event);
+}
+
+function onDragLeave(event) {
+  if ( DROP_INDICATOR?.visible && isLeavingWindow(event) ) DROP_INDICATOR.leave();
 }
 
 async function onDrop(event) {
+  DROP_INDICATOR?.hide();
   // Like a paste, a drop a shortcut waits for works without the drop setting
-  if ( !game.settings.get(MODULE_ID, ENABLE_DROP_SETTING) && !hasArmedQuickTarget() ) return;
-  if ( isEditableTarget(event.target) || isFoundryDropZone(event.target) ) return;
-  if ( !canCurrentUserUseTool() ) return;
-  if ( !hasTransferableImage(event.dataTransfer) ) return;
+  if ( !acceptsDrag(event) ) return;
 
   // Dropped files can only be read during the event, so the batch is collected before anything awaits
   const droppedFiles = extractDroppedImageFiles(event.dataTransfer);
@@ -650,9 +742,12 @@ async function onDrop(event) {
   const dropPoint = getCanvasDropPoint(event);
   const droppedUrls = droppedFiles.length ? [] : extractDroppedImageUrls(event.dataTransfer);
   const batch = droppedFiles.length > 1 ? droppedFiles : droppedUrls;
+  // A single image dropped onto a token, a tile or an open sheet goes there
+  const video = droppedFiles.length ? isVideoFile(droppedFiles[0]) : isVideoPath(getDroppedUri(event.dataTransfer));
+  const context = (batch.length > 1) ? null : resolveContextAt({x: event.clientX, y: event.clientY, target: event.target}, {media: {video}});
   try {
     if ( batch.length > 1 ) await importImageBatch(batch, {dropPoint, quickTarget});
-    else await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint, quickTarget});
+    else await importImage(() => extractDroppedImage(event.dataTransfer), {dropPoint, quickTarget, context});
   } catch (error) {
     console.error(`${MODULE_ID} | Drop handling failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
@@ -865,13 +960,16 @@ function canUserPerformAction(action) {
   if ( !getPlayerActionWhitelist().has(action) ) return false;
 
   // The GM opt-in above is the only gate for sharing: Foundry relays shared images without a permission check.
-  // Token and portrait targets also check ownership of each token or actor when they run.
+  // Token, portrait, item and journal page targets also check ownership of the document when they run. A page goes
+  // into a journal entry the player owns, which needs no permission to create journal entries.
   switch ( action ) {
     case ACTIONS.UPLOAD_DIRECTORY:
     case ACTIONS.SHARE_IMAGE:
     case ACTIONS.CHAT_IMAGE:
     case ACTIONS.TOKEN_IMAGE:
     case ACTIONS.ACTOR_PORTRAIT:
+    case ACTIONS.ITEM_IMAGE:
+    case ACTIONS.JOURNAL_PAGE:
       return user.hasPermission("FILES_UPLOAD");
     case ACTIONS.JOURNAL_IMAGE:
       return user.hasPermission("FILES_UPLOAD") && user.hasPermission("JOURNAL_CREATE");
@@ -902,7 +1000,7 @@ async function importImage(loadImage, options={}) {
   if ( file ) await handleImportedImage(file, options);
 }
 
-async function handleImportedImage(file, {dropPoint=null, quickTarget=null}={}) {
+async function handleImportedImage(file, {dropPoint=null, quickTarget=null, context=null}={}) {
   const preparedFile = prepareClipboardFile(file);
   const video = isVideoFile(preparedFile);
   const objectUrl = URL.createObjectURL(preparedFile);
@@ -915,6 +1013,7 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null}={}) 
     const grid = detectGridFromFileName(file.name, dimensions);
     const decision = await resolveImportDecision({
       quickTarget,
+      context,
       previewUrl: objectUrl,
       ...dimensions,
       optimizePlan,
@@ -949,7 +1048,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null}={}) 
       grid: layout.grid,
       video,
       temporaryObjectUrl: path === objectUrl ? objectUrl : null,
-      dropPoint
+      dropPoint,
+      context
     });
   } finally {
     if ( releaseObjectUrl ) URL.revokeObjectURL(objectUrl);
@@ -975,19 +1075,19 @@ async function resolveImportDecision({quickTarget=null, ...prompt}) {
   if ( quickTarget ) {
     const decision = buildQuickDecision(quickTarget, prompt);
     if ( decision ) return decision;
-    ui.notifications.warn(localize("SIPD.Quick.Unavailable", {target: getQuickTargetLabel(quickTarget)}));
+    ui.notifications.warn(localize("SIPD.Quick.Unavailable", {target: getQuickTargetLabel(quickTarget, prompt)}));
   }
   return promptForImportDecision(prompt);
 }
 
 // The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
 // is not possible right now, for example a token target without a selected token.
-function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=null}={}) {
-  const action = getQuickAction(quickTarget, {remoteUrl, video});
-  const choice = getActionChoices({remoteUrl, video}).find(entry => entry.value === action);
+function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=null, context=null}={}) {
+  const action = getQuickAction(quickTarget, {remoteUrl, video, context});
+  const choice = getActionChoices({remoteUrl, video, context}).find(entry => entry.value === action);
   if ( !choice || choice.disabled ) return null;
 
-  const defaults = getDialogDefaults({remoteUrl, video});
+  const defaults = getDialogDefaults({remoteUrl, video, context});
   return normalizeActionDecision({
     name: defaultDocumentName(),
     action,
@@ -1000,28 +1100,34 @@ function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=nul
     chatMode: CHAT_MODES.CURRENT,
     optimize: true,
     grid: grid ? {type: getDefaultGridType(), size: grid.size, columns: grid.columns} : null
-  }, {remoteUrl, video});
+  }, {remoteUrl, video, context});
 }
 
 // The target the dialog would preselect. A remembered target the user may not use at all (a player's default) gives
 // way like in the dialog, one the user may use but not right now (no selected token) stays, so nothing else happens.
-function getQuickAction(quickTarget, {remoteUrl=false, video=false}={}) {
+// The insert shortcut over a token, tile or sheet changes that one.
+function getQuickAction(quickTarget, {remoteUrl=false, video=false, context=null}={}) {
   if ( quickTarget === QUICK_TARGETS.SHARE ) return ACTIONS.SHARE_IMAGE;
+  const choices = getActionChoices({remoteUrl, video, context});
+  if ( context?.action && choices.some(choice => (choice.value === context.action) && !choice.disabled) ) return context.action;
   const preferred = getPreferredAction();
-  if ( getActionChoices({remoteUrl, video}).some(choice => choice.value === preferred) ) return preferred;
+  if ( choices.some(choice => choice.value === preferred) ) return preferred;
   return getDialogDefaults({remoteUrl, video}).action;
 }
 
-function getQuickTargetLabel(quickTarget) {
-  const action = getQuickAction(quickTarget);
+function getQuickTargetLabel(quickTarget, {context=null}={}) {
+  const action = getQuickAction(quickTarget, {context});
+  if ( actionTargetsContext(action, context) ) return getContextActionLabel(action, context);
   return getAllActionChoices().find(choice => choice.value === action)?.label ?? action;
 }
 
 // A shortcut reads the clipboard itself. When the browser does not allow that (plain HTTP, a refused
 // permission, copied files) or finds nothing, the next paste or drop within a few seconds goes to the target.
+// The token, tile or sheet under the mouse is taken when the key is pressed.
 function onQuickInsertKey(quickTarget) {
   if ( !canCurrentUserUseTool() ) return false;
-  void quickInsertFromClipboard(quickTarget).catch(error => {
+  const context = (quickTarget === QUICK_TARGETS.DEFAULT) ? getPointerContext() : null;
+  void quickInsertFromClipboard(quickTarget, {context}).catch(error => {
     console.error(`${MODULE_ID} | Shortcut import failed`, error);
     ui.notifications.error(localize("SIPD.Notification.Error", {message: error.message ?? String(error)}));
   });
@@ -1030,7 +1136,7 @@ function onQuickInsertKey(quickTarget) {
 
 // The target waits already while the clipboard is read: a paste during a permission prompt or Firefox's paste button
 // takes it, and the read then imports nothing a second time.
-async function quickInsertFromClipboard(quickTarget) {
+async function quickInsertFromClipboard(quickTarget, {context=null}={}) {
   const waiting = {target: quickTarget, until: Date.now() + QUICK_ARM_DURATION};
   ARMED_QUICK_TARGET = waiting;
   const sources = await readClipboardSources();
@@ -1041,7 +1147,7 @@ async function quickInsertFromClipboard(quickTarget) {
   }
   ARMED_QUICK_TARGET = null;
   countFeature(MODULE_ID, "imagePaste");
-  await importSources(sources, {quickTarget});
+  await importSources(sources, {quickTarget, context});
 }
 
 // Images, videos or image links on the clipboard, read through the Clipboard API. Null without access or when the
@@ -1215,7 +1321,7 @@ async function handleImportedBatch(files, {dropPoint=null, quickTarget=null}={})
 }
 
 // Uses an image URL the browser could not download as it is, without uploading a copy.
-async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null}={}) {
+async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null, context=null}={}) {
   const video = isVideoPath(url);
   let dimensions;
   try {
@@ -1225,7 +1331,7 @@ async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null}={}) 
   }
   if ( !(await confirmRemoteImageUrl(url)) ) return;
 
-  const decision = await resolveImportDecision({quickTarget, previewUrl: url, ...dimensions, remoteUrl: true, video});
+  const decision = await resolveImportDecision({quickTarget, context, previewUrl: url, ...dimensions, remoteUrl: true, video});
   if ( !decision ) return;
 
   await executeAction({
@@ -1235,7 +1341,8 @@ async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null}={}) 
     height: dimensions.height,
     video,
     temporaryObjectUrl: null,
-    dropPoint
+    dropPoint,
+    context
   });
 }
 
@@ -1289,7 +1396,7 @@ function getUrlHostLabel(url) {
 }
 
 async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null}) {
+  video=false, grid=null, context=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
@@ -1299,11 +1406,13 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
     optimizePlan,
     sourceType,
     video,
-    grid
-  }), {remoteUrl, video});
+    grid,
+    context
+  }), {remoteUrl, video, context});
   if ( !decision ) return null;
 
-  if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) ) {
+  // A target picked because of where the image was dropped is not the one to start with next time
+  if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) && !actionTargetsContext(decision.action, context) ) {
     await game.settings.set(MODULE_ID, LAST_ACTION_SETTING, decision.action);
   }
   return decision;
@@ -1314,10 +1423,11 @@ function requiresPersistentPath(action, shareToPlayers) {
 }
 
 // DialogV2 answers a button without callback with its action name, so Cancel arrives as the text "cancel".
-function normalizeActionDecision(decision, {remoteUrl=false, video=false}={}) {
+function normalizeActionDecision(decision, {remoteUrl=false, video=false, context=null}={}) {
   if ( !decision || (typeof decision !== "object") ) return null;
 
-  const allowedActions = new Set(getPermittedActions().filter(action => isActionForMedia(action, {remoteUrl, video})));
+  const allowedActions = new Set(getPermittedActions().filter(action => isActionForMedia(action, {remoteUrl, video})
+    && (!CONTEXT_ACTIONS.includes(action) || actionTargetsContext(action, context))));
   const action = allowedActions.has(decision.action) ? decision.action : ACTIONS.PREVIEW_ONLY;
   const behavior = getActionBehavior(action);
   const shareToPlayers = behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers);
@@ -1588,8 +1698,8 @@ async function readVideoDimensions(src) {
 }
 
 async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null}) {
-  const defaults = getDialogDefaults({remoteUrl, video});
+  video=false, grid=null, context=null}) {
+  const defaults = getDialogDefaults({remoteUrl, video, context});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
   const previewBadge = remoteUrl ? "SIPD.Dialog.PreviewBadgeLinked" : (video ? "SIPD.Dialog.PreviewBadgeVideo" : "SIPD.Dialog.PreviewBadge");
@@ -1646,7 +1756,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
               <label>${localize("SIPD.Dialog.Action")}</label>
               <div class="form-fields">
                 <select name="action">
-                  ${actionOptionsMarkup(defaults.action, {remoteUrl, video})}
+                  ${actionOptionsMarkup(defaults.action, {remoteUrl, video, context})}
                 </select>
               </div>
             </div>
@@ -1911,27 +2021,34 @@ function uploadDirectoryOptionsMarkup(choices=[]) {
   return choices.map(choice => `<option value="${escapeHtml(choice)}"></option>`).join("");
 }
 
-function actionOptionsMarkup(selectedAction=null, {remoteUrl=false, video=false}={}) {
-  return getActionChoices({remoteUrl, video}).map(({value, label, disabled}) => {
+function actionOptionsMarkup(selectedAction=null, {remoteUrl=false, video=false, context=null}={}) {
+  return getActionChoices({remoteUrl, video, context}).map(({value, label, disabled}) => {
     const disabledAttribute = disabled ? " disabled" : "";
     const selectedAttribute = value === selectedAction ? " selected" : "";
     return `<option value="${value}"${disabledAttribute}${selectedAttribute}>${escapeHtml(label)}</option>`;
   }).join("");
 }
 
-function getActionChoices({remoteUrl=false, video=false}={}) {
+// Targets of a drop onto a token, tile or sheet name it. Tile, item and journal page targets only exist for such a drop.
+function getActionChoices({remoteUrl=false, video=false, context=null}={}) {
   const allowedActions = new Set(getPermittedActions());
-  return getAllActionChoices().map(choice => ({
-    ...choice,
-    disabled: !isActionAvailable(choice.value) || !isActionForMedia(choice.value, {remoteUrl, video})
-  })).filter(choice => allowedActions.has(choice.value));
+  return getAllActionChoices()
+    .filter(choice => allowedActions.has(choice.value))
+    .filter(choice => !CONTEXT_ACTIONS.includes(choice.value) || actionTargetsContext(choice.value, context))
+    .map(choice => ({
+      ...choice,
+      label: actionTargetsContext(choice.value, context) ? getContextActionLabel(choice.value, context) : choice.label,
+      disabled: !isActionAvailable(choice.value, context) || !isActionForMedia(choice.value, {remoteUrl, video})
+    }));
 }
 
-// Whether the current canvas state allows a target: a viewed scene, selected tokens or an actor to change.
-function isActionAvailable(action) {
+// Whether the current canvas state allows a target: a viewed scene, selected tokens or an actor to change, or the
+// token, tile or sheet the image was dropped onto.
+function isActionAvailable(action, context=null) {
+  if ( CONTEXT_ACTIONS.includes(action) ) return actionTargetsContext(action, context);
   if ( SCENE_ACTIONS.includes(action) ) return hasCanvasScene();
-  if ( action === ACTIONS.TOKEN_IMAGE ) return getEligibleTokens().length > 0;
-  if ( action === ACTIONS.ACTOR_PORTRAIT ) return getEligibleActors().length > 0;
+  if ( action === ACTIONS.TOKEN_IMAGE ) return getEligibleTokens(context).length > 0;
+  if ( action === ACTIONS.ACTOR_PORTRAIT ) return getEligibleActors(context).length > 0;
   return true;
 }
 
@@ -1960,8 +2077,10 @@ function getActionBehavior(action) {
     case ACTIONS.SCENE_FOREGROUND_CURRENT:
     case ACTIONS.TILE_CENTERED:
     case ACTIONS.TILE_FIT:
+    case ACTIONS.TILE_IMAGE:
     case ACTIONS.MAP_PIN:
     case ACTIONS.JOURNAL_IMAGE:
+    case ACTIONS.JOURNAL_PAGE:
       return {
         ...NO_ACTION_OPTIONS,
         supportsShareToPlayers: true
@@ -1987,6 +2106,7 @@ function getActionBehavior(action) {
         supportsRecipients: true
       };
     case ACTIONS.ACTOR_PORTRAIT:
+    case ACTIONS.ITEM_IMAGE:
     case ACTIONS.PREVIEW_ONLY:
     default:
       return {...NO_ACTION_OPTIONS};
@@ -2085,11 +2205,13 @@ function getPreferredAction() {
     : game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING);
 }
 
-function getDialogDefaults({remoteUrl=false, video=false}={}) {
-  const choices = getActionChoices({remoteUrl, video});
+// A drop onto a token, tile or sheet preselects the target for it
+function getDialogDefaults({remoteUrl=false, video=false, context=null}={}) {
+  const choices = getActionChoices({remoteUrl, video, context});
   const preferredAction = getPreferredAction();
 
-  const resolvedAction = choices.find(choice => choice.value === preferredAction && !choice.disabled)?.value
+  const resolvedAction = choices.find(choice => (choice.value === context?.action) && !choice.disabled)?.value
+    ?? choices.find(choice => choice.value === preferredAction && !choice.disabled)?.value
     ?? choices.find(choice => choice.value === game.settings.get(MODULE_ID, DEFAULT_ACTION_SETTING) && !choice.disabled)?.value
     ?? choices.find(choice => !choice.disabled)?.value
     ?? ACTIONS.PREVIEW_ONLY;
@@ -2355,6 +2477,9 @@ async function executeAction(data) {
     case ACTIONS.TILE_FIT:
       await createTileFromImage(data, {fitToScene: true});
       break;
+    case ACTIONS.TILE_IMAGE:
+      await replaceTileImage(data);
+      break;
     case ACTIONS.MAP_PIN:
       await createMapPinFromImage(data);
       break;
@@ -2364,8 +2489,14 @@ async function executeAction(data) {
     case ACTIONS.ACTOR_PORTRAIT:
       await updateActorPortraits(data);
       break;
+    case ACTIONS.ITEM_IMAGE:
+      await updateItemImage(data);
+      break;
     case ACTIONS.JOURNAL_IMAGE:
       await createJournalEntryFromImage(data);
+      break;
+    case ACTIONS.JOURNAL_PAGE:
+      await addJournalImagePage(data);
       break;
     case ACTIONS.CHAT_IMAGE:
       await postImagesToChat([{path: data.path, name: data.name}], {chatMode: data.chatMode});
@@ -2387,6 +2518,7 @@ async function executeAction(data) {
     shareImageToPlayers(data.path, data.name, data.recipients);
   }
   countImportTarget(data.action);
+  if ( actionTargetsContext(data.action, data.context) ) countFeature(MODULE_ID, "contextImport");
 }
 
 function countImportTarget(action) {
@@ -2571,6 +2703,15 @@ async function createTileFromImage({name, path, width, height, dropPoint=null}, 
   return tile;
 }
 
+// The tile keeps its place and size, only the picture changes.
+async function replaceTileImage({path, context}) {
+  const tile = (context?.kind === CONTEXT_KINDS.TILE) ? context.document : null;
+  if ( !tile ) throw new Error(localize("SIPD.Error.NoTarget"));
+  await tile.update({"texture.src": path});
+  ui.notifications.info(localize("SIPD.Notification.TileUpdated", {name: context.name}));
+  return tile;
+}
+
 // Canvas point of a drop onto the board. Shift skips grid snapping, as in Foundry's own tile drop.
 function getCanvasDropPoint(event) {
   const board = globalThis.canvas?.app?.view;
@@ -2578,6 +2719,223 @@ function getCanvasDropPoint(event) {
   const point = canvas.canvasCoordinatesFromClient?.({x: event.clientX, y: event.clientY});
   if ( !Number.isFinite(point?.x) || !Number.isFinite(point?.y) ) return null;
   return {x: point.x, y: point.y, sceneId: canvas.scene.id, snap: !event.shiftKey};
+}
+
+// What a drop or paste at a screen point changes: the token or tile under it on the board, the actor, item or journal
+// sheet it lands on, or an empty spot on the board. Null elsewhere, and for documents the user may not change.
+// With media ({video, remoteUrl}) a target that cannot take that file counts as none.
+function resolveContextAt({x, y, target=null}={}, {media=null}={}) {
+  if ( !Number.isFinite(x) || !Number.isFinite(y) ) return null;
+  const element = target ?? globalThis.document?.elementFromPoint?.(x, y) ?? null;
+  const board = globalThis.canvas?.app?.view;
+  if ( board && (element === board) ) return getCanvasContextAt({x, y}, media);
+  return getSheetContext(element, media);
+}
+
+function getCanvasContextAt(client, media) {
+  if ( !hasCanvasScene() ) return null;
+  const point = canvas.canvasCoordinatesFromClient?.(client);
+  if ( !Number.isFinite(point?.x) || !Number.isFinite(point?.y) ) return null;
+  const hit = findCanvasHit(point);
+  const context = hit ? withContextAction(describePlaceableContext(hit.kind, hit.entry.object), media) : null;
+  return context ?? {kind: CONTEXT_KINDS.CANVAS, point: {x: point.x, y: point.y}};
+}
+
+// Tokens the user owns and, for a GM, tiles, shown on the viewed level. Tokens on top of a tile win, on the tiles
+// layer tiles do. Tiles as large as half the scene only count on the tiles layer.
+function findCanvasHit(point) {
+  const isGM = Boolean(game.user?.isGM);
+  const entries = (placeables, filter) => {
+    const list = [];
+    for ( const object of placeables ?? [] ) {
+      const doc = object?.document;
+      if ( !doc || (object.visible === false) || (doc.viewed === false) || !filter(doc) ) continue;
+      let bounds;
+      try {
+        bounds = object.bounds;
+      } catch (_error) {
+        continue;
+      }
+      if ( bounds ) list.push({object, bounds, elevation: doc.elevation ?? 0, sort: doc.sort ?? 0});
+    }
+    return list;
+  };
+  const tokens = entries(canvas.tokens?.placeables, doc => isGM || doc.isOwner);
+  const tiles = canUserPerformAction(ACTIONS.TILE_IMAGE) ? entries(canvas.tiles?.placeables, () => true) : [];
+  return pickCanvasHit(point, {
+    tokens,
+    tiles,
+    sceneRect: canvas.dimensions?.sceneRect ?? null,
+    tilesLayerActive: Boolean(canvas.tiles?.active)
+  });
+}
+
+function describePlaceableContext(kind, object) {
+  const doc = object.document;
+  if ( kind === CONTEXT_KINDS.TILE ) return {kind, document: doc, name: getTileName(doc), bounds: object.bounds};
+  // Only a linked token shares its actor, so only then the portrait is the token's too
+  const actor = object.actor ?? doc.actor ?? null;
+  const ownsActor = actor && (game.user?.isGM || actor.isOwner);
+  return {
+    kind,
+    document: doc,
+    name: doc.name || actor?.name || "",
+    actor: (doc.actorLink && ownsActor) ? actor : null,
+    bounds: object.bounds
+  };
+}
+
+// v13 tiles have no name, then the file name of their picture stands in
+function getTileName(tile) {
+  if ( tile?.name ) return tile.name;
+  const file = String(tile?.texture?.src ?? "").split(/[?#]/)[0].split("/").at(-1) ?? "";
+  try {
+    return decodeURIComponent(file).replace(/\.[^.]+$/, "") || localize("SIPD.Drop.TileFallback");
+  } catch (_error) {
+    return file || localize("SIPD.Drop.TileFallback");
+  }
+}
+
+// An open actor, item or journal sheet the user may edit
+function getSheetContext(element, media) {
+  const windowElement = element?.closest?.(".application, .window-app");
+  if ( !windowElement ) return null;
+  const app = foundry.applications?.instances?.get?.(windowElement.id) ?? ui.windows?.[windowElement.dataset?.appid];
+  const doc = app?.document ?? app?.object;
+  const kind = SHEET_KINDS[doc?.documentName];
+  if ( !kind || (app.isEditable === false) ) return null;
+  if ( !game.user?.isGM && !doc.isOwner ) return null;
+  return withContextAction({kind, document: doc, name: doc.name ?? "", app, element: windowElement}, media);
+}
+
+// The context with the target a drop onto it gets, or null when the user may not use that target for the file
+function withContextAction(context, media=null) {
+  const candidates = {
+    [CONTEXT_KINDS.TOKEN]: [ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT],
+    [CONTEXT_KINDS.TILE]: [ACTIONS.TILE_IMAGE],
+    [CONTEXT_KINDS.ACTOR]: [ACTIONS.ACTOR_PORTRAIT],
+    [CONTEXT_KINDS.ITEM]: [ACTIONS.ITEM_IMAGE],
+    [CONTEXT_KINDS.JOURNAL]: [ACTIONS.JOURNAL_PAGE]
+  }[context?.kind] ?? [];
+  const action = candidates.find(entry => actionTargetsContext(entry, context) && canUserPerformAction(entry)
+    && (!media || isActionForMedia(entry, media)));
+  return action ? {...context, action} : null;
+}
+
+// Whether a target changes the token, tile or sheet an image was dropped onto
+function actionTargetsContext(action, context) {
+  switch ( context?.kind ) {
+    case CONTEXT_KINDS.TOKEN:
+      return (action === ACTIONS.TOKEN_IMAGE) || ((action === ACTIONS.ACTOR_PORTRAIT) && Boolean(context.actor));
+    case CONTEXT_KINDS.TILE:
+      return action === ACTIONS.TILE_IMAGE;
+    case CONTEXT_KINDS.ACTOR:
+      return action === ACTIONS.ACTOR_PORTRAIT;
+    case CONTEXT_KINDS.ITEM:
+      return action === ACTIONS.ITEM_IMAGE;
+    case CONTEXT_KINDS.JOURNAL:
+      return action === ACTIONS.JOURNAL_PAGE;
+    default:
+      return false;
+  }
+}
+
+function getContextActionLabel(action, context) {
+  const keys = {
+    [ACTIONS.TOKEN_IMAGE]: "SIPD.Action.TokenImageOf",
+    [ACTIONS.ACTOR_PORTRAIT]: "SIPD.Action.ActorPortraitOf",
+    [ACTIONS.TILE_IMAGE]: "SIPD.Action.TileImageOf",
+    [ACTIONS.ITEM_IMAGE]: "SIPD.Action.ItemImageOf",
+    [ACTIONS.JOURNAL_PAGE]: "SIPD.Action.JournalPageOf"
+  };
+  const name = (context?.kind === CONTEXT_KINDS.TOKEN) && (action === ACTIONS.ACTOR_PORTRAIT) ? context.actor?.name : context?.name;
+  return keys[action] ? localize(keys[action], {name: name ?? ""}) : action;
+}
+
+// Short names and icons of the targets for the label next to the cursor
+const DROP_LABELS = Object.freeze({
+  [ACTIONS.SCENE_BACKGROUND]: {key: "SIPD.Drop.Target.SceneNew", icon: "fa-map"},
+  [ACTIONS.SCENE_BACKGROUND_CURRENT]: {key: "SIPD.Drop.Target.SceneBackground", icon: "fa-map"},
+  [ACTIONS.SCENE_FOREGROUND_CURRENT]: {key: "SIPD.Drop.Target.SceneForeground", icon: "fa-layer-group"},
+  [ACTIONS.TILE_CENTERED]: {key: "SIPD.Drop.Target.Tile", icon: "fa-cube"},
+  [ACTIONS.TILE_FIT]: {key: "SIPD.Drop.Target.TileFit", icon: "fa-expand"},
+  [ACTIONS.TILE_IMAGE]: {key: "SIPD.Drop.Target.TileImage", icon: "fa-cubes"},
+  [ACTIONS.JOURNAL_IMAGE]: {key: "SIPD.Drop.Target.Journal", icon: "fa-book-open"},
+  [ACTIONS.JOURNAL_PAGE]: {key: "SIPD.Drop.Target.JournalPage", icon: "fa-book-open"},
+  [ACTIONS.MAP_PIN]: {key: "SIPD.Drop.Target.MapPin", icon: "fa-map-pin"},
+  [ACTIONS.TOKEN_IMAGE]: {key: "SIPD.Drop.Target.TokenImage", icon: "fa-circle-user"},
+  [ACTIONS.ACTOR_PORTRAIT]: {key: "SIPD.Drop.Target.Portrait", icon: "fa-user"},
+  [ACTIONS.ITEM_IMAGE]: {key: "SIPD.Drop.Target.ItemImage", icon: "fa-suitcase"},
+  [ACTIONS.CHAT_IMAGE]: {key: "SIPD.Drop.Target.Chat", icon: "fa-comment"},
+  [ACTIONS.UPLOAD_DIRECTORY]: {key: "SIPD.Drop.Target.Upload", icon: "fa-upload"},
+  [ACTIONS.SHARE_IMAGE]: {key: "SIPD.Drop.Target.Share", icon: "fa-eye"},
+  [ACTIONS.PREVIEW_ONLY]: {key: "SIPD.Drop.Target.Preview", icon: "fa-magnifying-glass"}
+});
+// Targets that place the image where it is dropped get a marker there, targets for the whole scene outline it
+const POINT_ACTIONS = Object.freeze([ACTIONS.TILE_CENTERED, ACTIONS.MAP_PIN]);
+const SCENE_OUTLINE_ACTIONS = Object.freeze([ACTIONS.SCENE_BACKGROUND_CURRENT, ACTIONS.SCENE_FOREGROUND_CURRENT, ACTIONS.TILE_FIT]);
+
+function dropLabel(action, detail="") {
+  const entry = DROP_LABELS[action] ?? {key: "SIPD.Drop.Target.Preview", icon: "fa-image"};
+  return {icon: entry.icon, title: localize(entry.key), detail};
+}
+
+// Feeds the indicator from a dragover SIPD takes. Only file and link drags show it.
+function updateDropIndicator(event) {
+  if ( !getRegisteredSettingValue(DROP_INDICATOR_SETTING, true) ) return;
+  const info = readDragInfo(event.dataTransfer, {isSupportedType: isSupportedMediaType, isVideoType});
+  if ( !info.active ) {
+    DROP_INDICATOR?.hide();
+    return;
+  }
+  DROP_INDICATOR ??= new DropIndicator({describe: describeDrop, onShow: () => countFeature(MODULE_ID, "dropIndicator")});
+  DROP_INDICATOR.update({x: event.clientX, y: event.clientY, target: event.target, shiftKey: Boolean(event.shiftKey), info});
+}
+
+// What the indicator shows for a drag at a screen point: a glow on the token, tile or sheet the drop changes, else the
+// target the dialog starts with (or a shortcut waits for), a marker where a tile or map pin would land, or the outline of
+// the scene for a new background.
+function describeDrop({x, y, target, shiftKey=false, info={}}) {
+  if ( !getRegisteredSettingValue(DROP_INDICATOR_SETTING, true) ) return null;
+  const theme = getUITheme();
+  const armed = hasArmedQuickTarget() ? ARMED_QUICK_TARGET.target : null;
+  const video = Boolean(info.video);
+  const dialogHint = localize(armed ? "SIPD.Drop.NoDialog" : "SIPD.Drop.DialogHint");
+
+  // Several files get the batch dialog, which has targets of its own
+  if ( info.files > 1 ) {
+    return {theme, label: {icon: "fa-images", title: localize("SIPD.Drop.Batch", {count: info.files}), detail: dialogHint}};
+  }
+
+  const context = resolveContextAt({x, y, target}, {media: {video}});
+  if ( context && (context.kind !== CONTEXT_KINDS.CANVAS) && (armed !== QUICK_TARGETS.SHARE) ) {
+    const view = {theme, label: dropLabel(context.action, getContextDetail(context))};
+    if ( context.bounds ) view.box = {...toClientRect(context.bounds, point => canvas.clientCoordinatesFromCanvas(point)), shape: context.kind};
+    else view.sheet = context.element ?? null;
+    return view;
+  }
+
+  const action = armed ? getQuickAction(armed, {video}) : getDialogDefaults({video}).action;
+  const view = {theme, label: dropLabel(action, dialogHint)};
+  if ( context?.kind !== CONTEXT_KINDS.CANVAS ) return view;
+  if ( POINT_ACTIONS.includes(action) ) {
+    const raw = {x: context.point.x, y: context.point.y, snap: !shiftKey};
+    const snapped = (action === ACTIONS.MAP_PIN) ? getSnappedNotePoint(raw)
+      : ((raw.snap && (typeof canvas.tiles?.getSnappedPoint === "function")) ? canvas.tiles.getSnappedPoint(raw) : raw);
+    const client = canvas.clientCoordinatesFromCanvas(snapped);
+    const scale = Number(canvas.stage?.scale?.x) || 1;
+    const size = Math.min(96, Math.max(32, (Number(canvas.dimensions?.size) || 100) * scale * 0.6));
+    view.marker = {x: client.x, y: client.y, size};
+  } else if ( SCENE_OUTLINE_ACTIONS.includes(action) && canvas.dimensions?.sceneRect ) {
+    view.box = {...toClientRect(canvas.dimensions.sceneRect, point => canvas.clientCoordinatesFromCanvas(point)), shape: "scene"};
+  }
+  return view;
+}
+
+// The name under the target in the label: the token, tile, actor, item or journal entry
+function getContextDetail(context) {
+  if ( (context.kind === CONTEXT_KINDS.TOKEN) && (context.action === ACTIONS.ACTOR_PORTRAIT) ) return context.actor?.name ?? context.name;
+  return context.name ?? "";
 }
 
 // x/y of a new tile centered on a point (or on the scene) and kept inside the scene rect.
@@ -2673,16 +3031,25 @@ function getSnappedNotePoint(point) {
   return canvas.notes.getSnappedPoint({x: point.x, y: point.y});
 }
 
-// Selected tokens the user may change. Players only get the tokens of actors they own.
-function getEligibleTokens() {
-  if ( !hasCanvasScene() ) return [];
+// The token an image was dropped onto, else the selected tokens the user may change. Players only get the tokens of
+// actors they own.
+function getEligibleTokens(context=null) {
   const isGM = Boolean(game.user?.isGM);
+  if ( context?.kind === CONTEXT_KINDS.TOKEN ) {
+    const doc = context.document;
+    if ( !doc || (!isGM && !doc.isOwner) ) return [];
+    return [doc.object ?? {document: doc, actor: doc.actor ?? null}];
+  }
+  if ( !hasCanvasScene() ) return [];
   return Array.from(canvas.tokens?.controlled ?? []).filter(token => token?.document && (isGM || token.document.isOwner));
 }
 
-// Actors of the selected tokens, else the user's own character.
-function getEligibleActors() {
+// The actor of the sheet or linked token an image was dropped onto, else the actors of the selected tokens, else the
+// user's own character.
+function getEligibleActors(context=null) {
   const isGM = Boolean(game.user?.isGM);
+  if ( context?.kind === CONTEXT_KINDS.ACTOR ) return (isGM || context.document?.isOwner) ? [context.document] : [];
+  if ( context?.kind === CONTEXT_KINDS.TOKEN ) return context.actor && (isGM || context.actor.isOwner) ? [context.actor] : [];
   const actors = new Map();
   for ( const token of getEligibleTokens() ) {
     const actor = token.actor;
@@ -2693,14 +3060,16 @@ function getEligibleActors() {
   return Array.from(actors.values());
 }
 
-async function updateTokenImages({path, prototypeToken=false}) {
-  const tokens = getEligibleTokens();
+async function updateTokenImages({path, prototypeToken=false, context=null}) {
+  const tokens = getEligibleTokens(context);
   if ( !tokens.length ) {
     throw new Error(localize("SIPD.Error.NoToken"));
   }
 
+  // A dropped-onto token stays on its scene even when the GM looks at another one meanwhile
+  const scene = tokens[0].document.parent ?? canvas.scene;
   const updates = tokens.map(token => ({_id: token.document.id, "texture.src": path}));
-  await canvas.scene.updateEmbeddedDocuments("Token", updates);
+  await scene.updateEmbeddedDocuments("Token", updates);
 
   // Linked tokens share their actor, so the prototype keeps the new image for the next placement
   if ( prototypeToken ) {
@@ -2715,8 +3084,8 @@ async function updateTokenImages({path, prototypeToken=false}) {
   return tokens;
 }
 
-async function updateActorPortraits({path}) {
-  const actors = getEligibleActors();
+async function updateActorPortraits({path, context=null}) {
+  const actors = getEligibleActors(context);
   if ( !actors.length ) {
     throw new Error(localize("SIPD.Error.NoActor"));
   }
@@ -2724,6 +3093,31 @@ async function updateActorPortraits({path}) {
   for ( const actor of actors ) await actor.update({img: path});
   ui.notifications.info(localize("SIPD.Notification.PortraitUpdated", {name: actors.map(actor => actor.name).join(", ")}));
   return actors;
+}
+
+async function updateItemImage({path, context=null}) {
+  const item = (context?.kind === CONTEXT_KINDS.ITEM) ? context.document : null;
+  if ( !item ) throw new Error(localize("SIPD.Error.NoTarget"));
+  await item.update({img: path});
+  ui.notifications.info(localize("SIPD.Notification.ItemUpdated", {name: item.name}));
+  return item;
+}
+
+// A new last page of the open journal entry, which then shows it
+async function addJournalImagePage({name, path, context=null}) {
+  const entry = (context?.kind === CONTEXT_KINDS.JOURNAL) ? context.document : null;
+  if ( !entry ) throw new Error(localize("SIPD.Error.NoTarget"));
+  const sorts = Array.from(entry.pages?.contents ?? entry.pages ?? [], page => Number(page.sort) || 0);
+  const density = globalThis.CONST?.SORT_INTEGER_DENSITY ?? 100000;
+  const [page] = await entry.createEmbeddedDocuments("JournalEntryPage", [{
+    ...journalPageData({name, path}),
+    sort: (sorts.length ? Math.max(...sorts) : 0) + density
+  }]);
+  try {
+    if ( page?.id && (typeof context.app?.goToPage === "function") ) context.app.goToPage(page.id);
+  } catch (_error) {}
+  ui.notifications.info(localize("SIPD.Notification.JournalPageAdded", {name: entry.name}));
+  return page;
 }
 
 // One chat message with all images, in the user's current chat mode or public.
@@ -3203,6 +3597,11 @@ async function checkIntegrations() {
   const targets = [CONFIG.Scene?.documentClass, CONFIG.Tile?.documentClass, CONFIG.JournalEntry?.documentClass,
     foundry.applications?.apps?.ImagePopout];
   check(targets.every(Boolean), "Targets");
+  // Drops onto tokens, tiles and sheets and the drop indicator turn screen points into canvas points and find sheets
+  // by their window
+  const board = globalThis.canvas;
+  check((typeof board?.canvasCoordinatesFromClient === "function") && (typeof board?.clientCoordinatesFromCanvas === "function")
+    && (typeof foundry.applications?.instances?.get === "function"), "DropTargets");
   check(game.i18n.has("SIPD.Dialog.Title"), "Texts");
 
   if ( game.settings.get(MODULE_ID, CONVERT_WEBP_SETTING) ) {
@@ -3279,6 +3678,62 @@ function noticeNewVersions() {
   if ( game.settings.get(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING) === signature ) return;
   void game.settings.set(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, signature);
   ui.notifications.info(localize("SIPD.SelfTest.NewVersions", {versions: signature}), {permanent: true});
+}
+
+// Targets a drop onto a player's own token or sheet can use, the tip only tells players who have one of them
+const PLAYER_TIP_ACTIONS = Object.freeze([ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT, ACTIONS.ITEM_IMAGE, ACTIONS.JOURNAL_PAGE]);
+
+// A tip after the start about drops onto tokens, tiles and sheets and the two shortcuts. It comes back at every start
+// until it is dismissed, then never again in this browser.
+function showDropTip() {
+  if ( getRegisteredSettingValue(DROP_TIP_SETTING, false) ) return null;
+  if ( !canCurrentUserUseTool() || !game.user?.hasPermission?.("FILES_UPLOAD") ) return null;
+  const isGM = Boolean(game.user?.isGM);
+  if ( !isGM && !PLAYER_TIP_ACTIONS.some(action => canUserPerformAction(action)) ) return null;
+  if ( (typeof globalThis.document?.createElement !== "function") || !document.body ) return null;
+  if ( document.querySelector(".sipd-drop-tip") ) return null;
+
+  const key = name => {
+    try {
+      return formatKeybinding(game.keybindings?.get?.(MODULE_ID, name)?.[0]);
+    } catch (_error) {
+      return "";
+    }
+  };
+  const insert = key("quickInsert");
+  const share = canUserShareImages() ? key("quickShare") : "";
+  const kbd = value => `<kbd>${escapeHtml(value)}</kbd>`;
+  const keys = [
+    insert ? localize("SIPD.Tip.Insert", {key: kbd(insert)}) : "",
+    share ? localize("SIPD.Tip.Share", {key: kbd(share)}) : ""
+  ].filter(Boolean).join(" ");
+
+  const tip = document.createElement("aside");
+  tip.className = "sipd-drop-tip";
+  tip.dataset.uiTheme = getUITheme();
+  tip.setAttribute("role", "status");
+  tip.innerHTML = `
+    <div class="sipd-drop-tip__icon" aria-hidden="true"><i class="fa-solid fa-hand-pointer"></i></div>
+    <div class="sipd-drop-tip__body">
+      <div class="sipd-drop-tip__eyebrow">${localize("SIPD.Dialog.Eyebrow")}</div>
+      <strong class="sipd-drop-tip__title">${escapeHtml(localize("SIPD.Tip.Title"))}</strong>
+      <p>${escapeHtml(localize(isGM ? "SIPD.Tip.BodyGM" : "SIPD.Tip.BodyPlayer"))}</p>
+      ${keys ? `<p class="sipd-drop-tip__keys">${keys}</p>` : ""}
+    </div>
+    <div class="sipd-drop-tip__actions">
+      <button type="button" class="sipd-drop-tip__dismiss" data-action="dismiss">${escapeHtml(localize("SIPD.Tip.Dismiss"))}</button>
+    </div>
+    <button type="button" class="sipd-drop-tip__close" data-action="dismiss" aria-label="${escapeHtml(localize("SIPD.Tip.Close"))}"
+      data-tooltip="${escapeHtml(localize("SIPD.Tip.Close"))}"><i class="fa-solid fa-xmark"></i></button>`;
+  for ( const button of tip.querySelectorAll("[data-action=dismiss]") ) {
+    button.addEventListener("click", () => {
+      void game.settings.set(MODULE_ID, DROP_TIP_SETTING, true);
+      tip.classList.add("is-leaving");
+      setTimeout(() => tip.remove(), 220);
+    });
+  }
+  document.body.append(tip);
+  return tip;
 }
 
 // The menu button which runs the self-test. Foundry only accepts application classes as menus.
@@ -3513,6 +3968,32 @@ export const __test__ = {
   runSelfTest,
   noticeNewVersions,
   TESTED_VERSIONS,
-  escapeHtml
+  escapeHtml,
+  CONTEXT_ACTIONS,
+  DROP_INDICATOR_SETTING,
+  DROP_TIP_SETTING,
+  acceptsDrag,
+  onDragLeave,
+  trackPointer,
+  forgetPointer,
+  getPointerContext,
+  resolveContextAt,
+  getCanvasContextAt,
+  findCanvasHit,
+  describePlaceableContext,
+  getTileName,
+  getSheetContext,
+  withContextAction,
+  actionTargetsContext,
+  getContextActionLabel,
+  dropLabel,
+  updateDropIndicator,
+  describeDrop,
+  getContextDetail,
+  getDropIndicator: () => DROP_INDICATOR,
+  replaceTileImage,
+  updateItemImage,
+  addJournalImagePage,
+  showDropTip
 };
 

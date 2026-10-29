@@ -2,7 +2,7 @@
   "id": "sephrals-image-paste-drop",
   "title": "Sephral’s Image Paste & Drop",
   "description": "Paste an image with Ctrl+V or drop it onto Foundry and decide what it becomes: a new scene, the background of the current scene, a tile, a journal page or a picture shown to your players.",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "compatibility": {
     "minimum": 13,
     "verified": "14.369"

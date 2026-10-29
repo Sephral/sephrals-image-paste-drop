@@ -580,3 +580,352 @@
     align-items: flex-start;
   }
 }
+
+/* Drop indicator: the glow on the token, tile or sheet a drop changes, the marker where it lands and the label at the
+   cursor. The layer sits just above the board and below Foundry's interface, the label above everything. */
+.sipd-drop-layer {
+  --sipd-glow: 255, 183, 107;
+  --sipd-glow-edge: #ffd29a;
+  --sipd-glow-deep: 181, 81, 45;
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-index-canvas, 0) + 2);
+  pointer-events: none;
+}
+
+.sipd-drop-layer[hidden],
+.sipd-drop-layer > [hidden],
+.sipd-drop-label[hidden],
+.sipd-drop-label [hidden] {
+  display: none;
+}
+
+.sipd-drop-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--sipd-glow-edge);
+  border-radius: 18%;
+  background: rgba(var(--sipd-glow), 0.12);
+  box-shadow:
+    0 0 0 2px rgba(var(--sipd-glow-deep), 0.6),
+    0 0 14px 3px rgba(var(--sipd-glow), 0.55),
+    inset 0 0 12px rgba(var(--sipd-glow), 0.35);
+  transition: left 90ms ease-out, top 90ms ease-out, width 90ms ease-out, height 90ms ease-out;
+  animation: sipd-drop-pulse 1.1s ease-in-out infinite alternate;
+}
+
+.sipd-drop-box[data-shape="tile"] {
+  border-radius: 6px;
+}
+
+.sipd-drop-box[data-shape="scene"] {
+  border-style: dashed;
+  border-radius: 4px;
+  background: rgba(var(--sipd-glow), 0.05);
+  animation-duration: 1.6s;
+}
+
+.sipd-drop-marker {
+  --sipd-marker-size: 48px;
+  position: absolute;
+  width: var(--sipd-marker-size);
+  height: var(--sipd-marker-size);
+  margin: calc(var(--sipd-marker-size) / -2) 0 0 calc(var(--sipd-marker-size) / -2);
+  box-sizing: border-box;
+  border: 2px solid var(--sipd-glow-edge);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(var(--sipd-glow), 0.28) 0%, rgba(var(--sipd-glow), 0.06) 70%);
+  box-shadow: 0 0 0 2px rgba(var(--sipd-glow-deep), 0.55), 0 0 18px 4px rgba(var(--sipd-glow), 0.5);
+  animation: sipd-drop-ring 1.1s ease-in-out infinite alternate;
+}
+
+.sipd-drop-marker::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--sipd-glow-edge);
+  box-shadow: 0 0 8px rgba(var(--sipd-glow), 0.95);
+}
+
+/* An open sheet the drop changes */
+.sipd-drop-target {
+  outline: 3px solid #ffc47e;
+  outline-offset: 1px;
+  box-shadow:
+    0 0 0 5px rgba(181, 81, 45, 0.6),
+    0 0 36px 12px rgba(255, 170, 80, 0.65);
+  animation: sipd-drop-sheet 1.1s ease-in-out infinite alternate;
+}
+
+.sipd-drop-label {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: calc(var(--z-index-tooltip, 9999) + 1);
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 340px;
+  padding: 0.4rem 0.8rem 0.4rem 0.4rem;
+  border: 1px solid rgba(181, 81, 45, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.97);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  color: #1f1a17;
+  font-family: var(--font-body, "Signika", sans-serif);
+  font-size: 13px;
+  line-height: 1.2;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.sipd-drop-label__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #b5512d;
+  color: #fff8ec;
+  font-size: 13px;
+}
+
+.sipd-drop-label__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sipd-drop-label__title {
+  font-weight: 700;
+}
+
+.sipd-drop-label__detail {
+  overflow: hidden;
+  color: #6f655d;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sipd-drop-label[data-ui-theme="foundry"] {
+  border-color: rgba(198, 106, 71, 0.45);
+  background: rgba(24, 25, 28, 0.95);
+  color: #ede7dc;
+}
+
+.sipd-drop-label[data-ui-theme="foundry"] .sipd-drop-label__icon {
+  background: #c66a47;
+}
+
+.sipd-drop-label[data-ui-theme="foundry"] .sipd-drop-label__detail {
+  color: #b7ad9f;
+}
+
+@keyframes sipd-drop-pulse {
+  from {
+    box-shadow:
+      0 0 0 2px rgba(var(--sipd-glow-deep), 0.65),
+      0 0 14px 4px rgba(var(--sipd-glow), 0.55),
+      inset 0 0 12px rgba(var(--sipd-glow), 0.35);
+  }
+  to {
+    box-shadow:
+      0 0 0 2px rgba(var(--sipd-glow-deep), 0.65),
+      0 0 30px 10px rgba(var(--sipd-glow), 0.8),
+      inset 0 0 18px rgba(var(--sipd-glow), 0.5);
+  }
+}
+
+@keyframes sipd-drop-ring {
+  from {
+    transform: scale(0.85);
+  }
+  to {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes sipd-drop-sheet {
+  from {
+    box-shadow: 0 0 0 5px rgba(181, 81, 45, 0.55), 0 0 24px 8px rgba(255, 170, 80, 0.5);
+  }
+  to {
+    box-shadow: 0 0 0 5px rgba(181, 81, 45, 0.65), 0 0 48px 18px rgba(255, 170, 80, 0.8);
+  }
+}
+
+/* The tip after the start about drops onto tokens, tiles and sheets */
+.sipd-drop-tip {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  z-index: var(--z-index-ui, 60);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  width: min(580px, calc(100vw - 2rem));
+  padding: 0.85rem 2.4rem 0.85rem 0.9rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(73, 49, 32, 0.16);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top left, rgba(214, 138, 77, 0.22), transparent 40%),
+    linear-gradient(180deg, #fffaf0 0%, #f4efe1 100%);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  color: #1f1a17;
+  font-family: var(--font-body, "Signika", sans-serif);
+  transform: translateX(-50%);
+  animation: sipd-tip-in 260ms ease-out;
+}
+
+.sipd-drop-tip.is-leaving {
+  opacity: 0;
+  transform: translate(-50%, 12px);
+  transition: opacity 200ms ease-in, transform 200ms ease-in;
+}
+
+.sipd-drop-tip__icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #b5512d;
+  box-shadow: 0 0 0 4px rgba(181, 81, 45, 0.15), 0 0 18px rgba(255, 183, 107, 0.55);
+  color: #fff8ec;
+  font-size: 1.1rem;
+}
+
+.sipd-drop-tip__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.sipd-drop-tip__eyebrow {
+  color: #b5512d;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.sipd-drop-tip__title {
+  font-size: 1rem;
+}
+
+.sipd-drop-tip p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.sipd-drop-tip__keys {
+  color: #6f655d;
+}
+
+.sipd-drop-tip kbd {
+  display: inline-block;
+  padding: 0 0.35em;
+  border: 1px solid rgba(73, 49, 32, 0.25);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: #fffaf0;
+  color: #1f1a17;
+  font-family: inherit;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.sipd-drop-tip button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sipd-drop-tip__dismiss {
+  min-height: 2.1rem;
+  padding: 0 1rem;
+  border: none;
+  border-radius: 999px;
+  background: #b5512d;
+  color: #fff8ec;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sipd-drop-tip__dismiss:hover,
+.sipd-drop-tip__dismiss:focus-visible {
+  background: #9a4223;
+}
+
+.sipd-drop-tip__close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #6f655d;
+  line-height: 1;
+}
+
+.sipd-drop-tip__close:hover,
+.sipd-drop-tip__close:focus-visible {
+  background: rgba(181, 81, 45, 0.12);
+  color: #1f1a17;
+}
+
+.sipd-drop-tip[data-ui-theme="foundry"] {
+  border-color: rgba(224, 213, 196, 0.12);
+  border-radius: 8px;
+  background: rgba(24, 25, 28, 0.97);
+  color: #ede7dc;
+}
+
+.sipd-drop-tip[data-ui-theme="foundry"] .sipd-drop-tip__keys,
+.sipd-drop-tip[data-ui-theme="foundry"] .sipd-drop-tip__close {
+  color: #b7ad9f;
+}
+
+.sipd-drop-tip[data-ui-theme="foundry"] kbd {
+  border-color: rgba(224, 213, 196, 0.25);
+  background: #2c2d33;
+  color: #ede7dc;
+}
+
+.sipd-drop-tip[data-ui-theme="foundry"] .sipd-drop-tip__eyebrow {
+  color: #c66a47;
+}
+
+@keyframes sipd-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sipd-drop-box,
+  .sipd-drop-marker,
+  .sipd-drop-target,
+  .sipd-drop-tip {
+    animation: none;
+    transition: none;
+  }
+}
