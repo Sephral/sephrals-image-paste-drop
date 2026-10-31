@@ -9,11 +9,11 @@
   },
   "authors": [
     {
-      "name": "Sephral"
+      "name": "Sephral",
+      "url": "https://github.com/Sephral"
     }
   ],
   "url": "https://github.com/Sephral/sephrals-image-paste-drop.git",
-  "persistentStorage": true,
   "esmodules": [
     "scripts/sipd.js"
   ],
@@ -31,5 +31,6 @@
       "name": "Deutsch",
       "path": "lang/de.json"
     }
-  ]
+  ],
+  "persistentStorage": true
 }

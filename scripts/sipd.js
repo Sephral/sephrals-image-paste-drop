@@ -46,6 +46,7 @@ import {
 import {DropIndicator} from "./drop-indicator.js";
 import {countFeature, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
+import {registerHubModule} from "./hub.mjs";
 
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
@@ -345,6 +346,7 @@ function resetModuleTranslations() {
 }
 
 Hooks.once("init", () => {
+  registerHubModule({moduleId: MODULE_ID, tested: TESTED_VERSIONS});
   game.settings.register(MODULE_ID, UI_LANGUAGE_SETTING, {
     scope: "client",
     config: true,
