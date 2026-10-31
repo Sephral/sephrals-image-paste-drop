@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 2;
-export const CATALOG_REVISION = 2026103101;
+export const CATALOG_REVISION = 2026103102;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -54,7 +54,7 @@ const CATALOG = [
   { id: "sephrals-crucible-sheet-quickbar", title: "Crucible Sheet & Quickbar", listed: true, systems: ["crucible"],
     text: { en: "A compact hero and adversary sheet with a combat quickbar.",
       de: "Ein kompakter Bogen für Helden und Gegner mit Kampfleiste." } },
-  { id: "sephrals-handout-lens", title: "Handout Lens", listed: false, released: false,
+  { id: "sephrals-handout-lens", title: "Handout Lens", listed: false,
     text: { en: "Zoom, pan and a reading lens for every picture you show your players.",
       de: "Zoomen, verschieben und eine Leselupe für jedes Bild, das du deinen Spielern zeigst." } },
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
@@ -69,7 +69,7 @@ const CATALOG = [
   { id: "sephrals-lunar-almanac", title: "Lunar Almanac", listed: true, needs: "ember",
     text: { en: "Ember's moons and inner realms with their phases at a glance.",
       de: "Embers Monde und innere Reiche mit ihren Phasen auf einen Blick." } },
-  { id: "sephrals-map-knowledge", title: "Map Knowledge", listed: false, released: false, core: 14,
+  { id: "sephrals-map-knowledge", title: "Map Knowledge", listed: false, core: 14,
     text: { en: "Reveal parts of the map to your players, right in Foundry's own fog of war.",
       de: "Deck Teile der Karte für deine Spieler auf, direkt in Foundrys eigenem Nebel des Krieges." } },
   { id: "sephrals-module-loadouts", title: "Module Loadouts", listed: true,
