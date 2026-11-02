@@ -1,6 +1,6 @@
 /**
  * The window "Sephral's Modules": every Sephral module in the world with its version, self test, settings, manual and
- * demo video, the debug file, and on request the other Sephral modules that fit the world.
+ * demo video, the debug file, and on request the other Sephral modules that fit the world, each with a way to install it.
  *
  * Every module carries an identical copy as scripts/hub.mjs next to scripts/debug-file.mjs. Never change one copy
  * alone: all copies stay the same. The copies share one registry on globalThis. The copy with the highest
@@ -11,7 +11,7 @@
  * test runs through api.runSelfTest. The debug file button uses scripts/debug-file.mjs beside this file.
  */
 
-export const HUB_LIB_VERSION = 2;
+export const HUB_LIB_VERSION = 3;
 export const CATALOG_REVISION = 2026103102;
 
 const REGISTRY_KEY = "sephralsHub";
@@ -25,6 +25,17 @@ const DISCORD = "https://discord.gg/7BjCgDYaBP";
 /** The README demo videos, played from GitHub only when the GM starts one. */
 const VIDEO_BASE = "https://raw.githubusercontent.com/Sephral";
 const VIDEO_WINDOW_ID = "sephrals-hub-video";
+/**
+ * Installing: Foundry installs packages only on its setup screen, where no module runs, and refuses every package
+ * action while a world is active. The window copies the manifest URL and shows the steps, the clip comes from the
+ * profile repository only when the GM starts it.
+ */
+const INSTALL_WINDOW_ID = "sephrals-hub-install";
+const INSTALL_VIDEO = `${VIDEO_BASE}/Sephral/main/media/install.mp4`;
+const FORGE_BAZAAR = "https://forge-vtt.com/bazaar";
+/** The module a GM set out to install, kept in this browser until the window showed it installed. */
+const PENDING_KEY = "sephrals-hub.pendingInstall";
+const PENDING_DAYS = 7;
 const PROBLEM_LIMIT = 5;
 
 /* -------------------------------------------- */
@@ -187,6 +198,24 @@ const TEXTS = {
     hiddenOne: "1 module for another system or setting is hidden.",
     packagePage: "Package page",
     github: "On GitHub",
+    install: "Install",
+    installTitle: "Install {title}",
+    installUnlisted: "{title} is not in Foundry's module search. Install it with its link instead.",
+    installListed: "Search for {title} in Foundry's Install Module window, or install it with its link.",
+    copyLink: "Copy link",
+    linkCopied: "Link copied. Paste it into Manifest URL on the setup screen.",
+    stepCopy: "Copy the link.",
+    stepSetup: "Go back to Setup, open Add-on Modules and click Install Module.",
+    stepPaste: "Paste the link into Manifest URL at the bottom of the window and click Install.",
+    stepEnable: "Launch this world again. This window then offers Enable for {title}.",
+    forgeBazaar: "Open the Bazaar on The Forge and click Install From Manifest under Toolbox.",
+    forgePaste: "Paste the link and click Install Module.",
+    forgeOpen: "Open the Bazaar",
+    showHow: "Show me how",
+    howNote: "The clip plays from GitHub.",
+    returnSetup: "Return to Setup",
+    setupNote: "Players in the world are disconnected. Foundry may ask for the administrator password.",
+    installedBanner: "{title} is installed now. Click Enable to switch it on in this world.",
     allModules: "All modules on GitHub",
     discord: "Discord",
     gmOnly: "Only a GM can open Sephral’s Modules."
@@ -244,6 +273,24 @@ const TEXTS = {
     hiddenOne: "1 Modul für ein anderes System oder Setting ist ausgeblendet.",
     packagePage: "Paketseite",
     github: "Auf GitHub",
+    install: "Installieren",
+    installTitle: "{title} installieren",
+    installUnlisted: "{title} steht nicht in Foundrys Modulsuche. Installier es stattdessen mit seinem Link.",
+    installListed: "Such im Fenster „Modul installieren“ nach {title} oder installier es mit seinem Link.",
+    copyLink: "Link kopieren",
+    linkCopied: "Link kopiert. Füg ihn im Setup bei Manifest-URL ein.",
+    stepCopy: "Kopier den Link.",
+    stepSetup: "Geh zurück zum Setup, öffne Add-on-Module und klick auf Modul installieren.",
+    stepPaste: "Füg den Link unten im Fenster bei Manifest-URL ein und klick auf Installieren.",
+    stepEnable: "Starte diese Welt wieder. Dieses Fenster bietet dann Aktivieren für {title} an.",
+    forgeBazaar: "Öffne den Bazaar auf The Forge und klick unter Toolbox auf Install From Manifest.",
+    forgePaste: "Füg den Link ein und klick auf Install Module.",
+    forgeOpen: "Bazaar öffnen",
+    showHow: "Zeig es mir",
+    howNote: "Der Clip läuft von GitHub.",
+    returnSetup: "Zurück zum Setup",
+    setupNote: "Die Spieler in der Welt werden getrennt. Foundry fragt eventuell nach dem Administratorpasswort.",
+    installedBanner: "{title} ist jetzt installiert. Klick auf Aktivieren, um es in dieser Welt einzuschalten.",
     allModules: "Alle Module auf GitHub",
     discord: "Discord",
     gmOnly: "Nur eine SL kann Sephral’s Module öffnen."
@@ -313,6 +360,7 @@ claim();
 export function registerHubModule(module) {
   if (!module?.moduleId) throw new Error("A hub module needs a moduleId");
   claim();
+  hookReady();
   registry().modules.set(module.moduleId, module);
   const game = globalThis.game;
   if (!globalThis.foundry?.applications?.api || (typeof game?.settings?.registerMenu !== "function")) return;
@@ -337,6 +385,15 @@ export function hubMenuType() {
       return this;
     }
   };
+}
+
+let readyHooked = false;
+
+/** Once per copy: after the world starts again, the copy that draws the window shows a module the GM installed. */
+function hookReady() {
+  if (readyHooked || (typeof globalThis.Hooks?.once !== "function")) return;
+  readyHooked = true;
+  globalThis.Hooks.once("ready", showInstalled);
 }
 
 /** Open the window. GMs only. */
@@ -371,6 +428,37 @@ export function shortTitle(title) {
  */
 export function demoVideo(entry) {
   return entry?.id && (entry.video !== false) ? `${VIDEO_BASE}/${entry.id}/main/media/demo.mp4` : null;
+}
+
+/**
+ * The manifest URL of a Sephral module: the module.json of its latest GitHub release.
+ * @param {string} moduleId
+ * @returns {string}
+ */
+export function manifestUrl(moduleId) {
+  return `${GITHUB}/${moduleId}/releases/latest/download/module.json`;
+}
+
+/**
+ * What to do with the module a GM set out to install.
+ * @param {{id: string, at: number}|null} pending
+ * @param {{get: (id: string) => object}} modules   game.modules
+ * @param {number} now   Milliseconds
+ * @returns {"show"|"wait"|"drop"|null}   show: installed and off, wait: not installed yet, drop: done or too old
+ */
+export function pendingState(pending, modules, now) {
+  if (!pending?.id) return null;
+  if (!Number.isFinite(pending.at) || ((now - pending.at) > (PENDING_DAYS * 86400000))) return "drop";
+  const module = modules?.get?.(pending.id);
+  if (!module) return "wait";
+  return module.active ? "drop" : "show";
+}
+
+/** The Forge declares a global class, not a property of globalThis, and serves its games from forge-vtt.com. */
+function onTheForge() {
+  // eslint-disable-next-line no-undef
+  if ((typeof ForgeVTT !== "undefined") && ForgeVTT?.usingTheForge) return true;
+  return /(^|\.)forge-vtt\.com$/.test(globalThis.location?.hostname ?? "");
 }
 
 export function isNewer(a, b) {
@@ -592,6 +680,50 @@ async function enableModule(moduleId) {
   foundry.utils.debouncedReload?.();
 }
 
+function readPending() {
+  try {
+    return JSON.parse(globalThis.localStorage?.getItem(PENDING_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+function writePending(moduleId) {
+  try {
+    if (moduleId) globalThis.localStorage?.setItem(PENDING_KEY, JSON.stringify({ id: moduleId, at: Date.now() }));
+    else globalThis.localStorage?.removeItem(PENDING_KEY);
+  } catch {
+    // Without storage the window only stays closed after the install
+  }
+}
+
+/** The module installed since the GM asked for it, highlighted until the world reloads. */
+let justInstalled = null;
+
+function showInstalled() {
+  const game = globalThis.game;
+  if ((registry().owner !== SELF) || !game?.user?.isGM) return;
+  const pending = readPending();
+  const state = pendingState(pending, game.modules, Date.now());
+  if (state === "drop") writePending(null);
+  if (state !== "show") return;
+  writePending(null);
+  justInstalled = pending.id;
+  openSephralsModules();
+}
+
+async function copyLink(entry) {
+  if (!entry) return;
+  writePending(entry.id);
+  try {
+    await globalThis.game.clipboard.copyPlainText(manifestUrl(entry.id));
+    globalThis.ui.notifications?.info(text("linkCopied"));
+  } catch (error) {
+    // The field next to the button still holds the link to copy by hand
+    console.warn("Sephral's Modules | The link could not be copied", error);
+  }
+}
+
 /* -------------------------------------------- */
 /*  Window                                      */
 /* -------------------------------------------- */
@@ -647,6 +779,9 @@ function createWindowClass() {
         },
         video(event, target) {
           openVideo(target.dataset.module);
+        },
+        install(event, target) {
+          openInstall(target.dataset.module);
         }
       }
     };
@@ -716,6 +851,91 @@ function createVideoWindowClass() {
   };
 }
 
+let InstallWindowClass = null;
+
+/** The steps to install a catalog module, in a window of its own. */
+function openInstall(moduleId) {
+  const catalog = registry().catalog ?? { modules: CATALOG };
+  const entry = catalog.modules.find((candidate) => candidate.id === moduleId);
+  if (!entry) return null;
+  InstallWindowClass ??= createInstallWindowClass();
+  ensureStyles();
+  const existing = globalThis.foundry.applications.instances?.get?.(INSTALL_WINDOW_ID);
+  const app = existing ?? new InstallWindowClass();
+  app.entry = entry;
+  app.showClip = false;
+  void app.render({ force: true }).then(() => app.bringToFront?.());
+  return app;
+}
+
+function createInstallWindowClass() {
+  const { ApplicationV2 } = globalThis.foundry.applications.api;
+  return class SephralsModulesInstall extends ApplicationV2 {
+    static DEFAULT_OPTIONS = {
+      id: INSTALL_WINDOW_ID,
+      classes: ["sephrals-hub", "sephrals-hub-install"],
+      window: { icon: "fa-solid fa-download", resizable: true },
+      position: { width: 640, height: "auto" },
+      actions: {
+        copyLink() {
+          void copyLink(this.entry);
+        },
+        showHow() {
+          this.showClip = true;
+          this.render();
+        },
+        returnSetup() {
+          writePending(this.entry?.id);
+          void globalThis.game.shutDown();
+        }
+      }
+    };
+
+    entry = null;
+    showClip = false;
+
+    get title() {
+      return text("installTitle", { title: this.entry?.title ?? "" });
+    }
+
+    async _renderHTML() {
+      return renderInstall(this.entry, this.showClip);
+    }
+
+    _replaceHTML(result, content) {
+      content.innerHTML = result;
+      const field = content.querySelector(".sh-link input");
+      field?.addEventListener("focus", () => field.select());
+      const error = content.querySelector(".sh-video-error");
+      content.querySelector("video")?.addEventListener("error", () => { if (error) error.hidden = false; });
+    }
+  };
+}
+
+function renderInstall(entry, showClip) {
+  if (!entry) return "";
+  const forge = onTheForge();
+  const steps = forge ? ["stepCopy", "forgeBazaar", "forgePaste", "stepEnable"] : ["stepCopy", "stepSetup", "stepPaste", "stepEnable"];
+  const clip = showClip
+    ? `<video class="sh-video" src="${escape(INSTALL_VIDEO)}" controls autoplay muted loop playsinline></video>
+      <p class="sh-hint">${escape(text("howNote"))}</p>
+      <p class="sh-note sh-warn sh-video-error" hidden><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${escape(text("videoError"))}</p>`
+    : `<button type="button" class="sh-button" data-action="showHow"><i class="fa-solid fa-circle-play" aria-hidden="true"></i> ${escape(text("showHow"))}</button>`;
+  const leave = forge
+    ? `<a class="sh-button" href="${FORGE_BAZAAR}" target="_blank" rel="noopener"><i class="fa-solid fa-store" aria-hidden="true"></i> ${escape(text("forgeOpen"))}</a>`
+    : `<button type="button" class="sh-button" data-action="returnSetup"><i class="fa-solid fa-door-open" aria-hidden="true"></i> ${escape(text("returnSetup"))}</button>
+      <span class="sh-hint">${escape(text("setupNote"))}</span>`;
+  return `
+  <p class="sh-lead">${escape(text(entry.listed ? "installListed" : "installUnlisted", { title: entry.title }))}</p>
+  <div class="sh-link">
+    <input type="text" readonly value="${escape(manifestUrl(entry.id))}" aria-label="Manifest URL">
+    <button type="button" class="sh-button sh-primary" data-action="copyLink"><i class="fa-solid fa-copy" aria-hidden="true"></i> ${escape(text("copyLink"))}</button>
+  </div>
+  <ol class="sh-steps">${steps.map((key) => `<li>${escape(text(key, { title: entry.title }))}</li>`).join("")}</ol>
+  ${forge ? "" : `<div class="sh-clip">${clip}</div>`}
+  <footer class="sh-install-foot">${leave}</footer>`;
+}
+
 function videoButton(entry) {
   return demoVideo(entry) ? iconButton("video", entry.id, text("video"), "fa-solid fa-play", "sh-flame") : "";
 }
@@ -772,7 +992,8 @@ function moduleRow(module, entry) {
     actions = `<button type="button" class="sh-button" data-action="enable" data-module="${escape(module.id)}">`
       + `<i class="fa-solid fa-power-off" aria-hidden="true"></i> ${escape(text("enable"))}</button>`;
   }
-  return `<li class="sh-row${module.active ? "" : " sh-inactive"}">
+  const fresh = !module.active && (module.id === justInstalled);
+  return `<li class="sh-row${module.active ? "" : " sh-inactive"}${fresh ? " sh-row-new" : ""}">
     <div class="sh-row-main">
       <div class="sh-row-title"><strong>${escape(module.title)}</strong>
         <span class="sh-pill">${escape(module.version)}</span>
@@ -788,7 +1009,7 @@ function card(entry, extra = {}) {
   return `<li class="sh-card${extra.partner ? " sh-card-works" : ""}">
     <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${fit}</div>
     <p>${escape(extra.text ? localized(extra.text) : localized(entry.text))}</p>
-    <div class="sh-card-links">${packageLink(entry)}${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}</div>
+    <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="install" data-module="${escape(entry.id)}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${escape(text("install"))}</span></button>${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}${packageLink(entry)}</div>
   </li>`;
 }
 
@@ -799,6 +1020,7 @@ function renderContent(moreOpen) {
   const catalogById = new Map(catalog.modules.map((entry) => [entry.id, entry]));
   const installed = installedModules(game.modules);
   const activeCount = installed.filter((module) => module.active).length;
+  const fresh = installed.find((module) => !module.active && (module.id === justInstalled));
   const system = game.system;
 
   const worldModules = new Map(Array.from(game.modules ?? []).map((module) => [module.id, module]));
@@ -848,6 +1070,7 @@ function renderContent(moreOpen) {
       <button type="button" class="sh-button" data-action="debugFile"><i class="fa-solid fa-bug" aria-hidden="true"></i> ${escape(text("debugFile"))}</button>
     </div>
   </section>
+  ${fresh ? `<div class="sh-banner sh-banner-new"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><p>${escape(text("installedBanner", { title: fresh.title }))}</p></div>` : ""}
   ${newer.length ? `<div class="sh-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><p>${escape(text("newer", { list: newerList }))}</p></div>` : ""}
   <section class="sh-panel">
     <header class="sh-panel-head"><h2>${escape(text("inWorld"))}</h2><span class="sh-hint">${escape(text("inWorldHint"))}</span></header>
@@ -983,6 +1206,28 @@ body.theme-light .sephrals-hub:not(.themed), .sephrals-hub.themed.theme-light {
 }
 .sephrals-hub-video .window-content { gap: 8px; }
 .sephrals-hub .sh-video { display: block; width: 100%; aspect-ratio: 16 / 10; background: #000; border-radius: var(--sh-radius-small); }
+.sephrals-hub .sh-play.sh-get { color: var(--sh-accent-ink); background: var(--sh-accent); border: 1px solid var(--sh-accent); }
+.sephrals-hub .sh-play.sh-get:hover, .sephrals-hub .sh-play.sh-get:focus-visible { filter: brightness(1.1); box-shadow: none; }
+.sephrals-hub .sh-banner.sh-banner-new { background: var(--sh-accent-soft); border-color: var(--sh-accent); }
+.sephrals-hub .sh-banner.sh-banner-new i { color: var(--sh-accent); }
+.sephrals-hub .sh-row.sh-row-new { border-color: var(--sh-accent); box-shadow: 0 0 0 1px var(--sh-accent); }
+.sephrals-hub-install .window-content { gap: 14px; }
+.sephrals-hub .sh-lead { font-size: 15px; line-height: 1.45; }
+.sephrals-hub .sh-link { display: flex; align-items: center; gap: 8px; }
+.sephrals-hub .sh-link input {
+  flex: 1; min-width: 0; height: 36px; margin: 0; padding: 0 10px; font: 13px var(--font-monospace, monospace); color: var(--sh-ink);
+  background: var(--sh-row); border: 1px solid var(--sh-line); border-radius: var(--sh-radius-small);
+}
+.sephrals-hub .sh-steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; counter-reset: sh-step; }
+.sephrals-hub .sh-steps li { position: relative; min-height: 24px; padding-left: 34px; font-size: 14px; line-height: 1.45; counter-increment: sh-step; }
+.sephrals-hub .sh-steps li::before {
+  content: counter(sh-step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 24px; height: 24px;
+  font-size: 13px; font-weight: 700; color: var(--sh-accent-ink); background: var(--sh-accent); border-radius: 50%;
+}
+.sephrals-hub .sh-clip { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.sephrals-hub .sh-clip .sh-video { aspect-ratio: 1280 / 876; }
+.sephrals-hub .sh-install-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 12px; border-top: 1px solid var(--sh-line); }
+.sephrals-hub a.sh-button:hover { text-decoration: none; }
 .sephrals-hub .sh-footer { display: flex; justify-content: flex-end; gap: 16px; padding: 0 4px; font-size: 13px; flex: none; }
 `;
 

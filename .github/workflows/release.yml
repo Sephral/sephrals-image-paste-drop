@@ -70,12 +70,19 @@ jobs:
         working-directory: .release/package
         run: zip -r ../${{ steps.metadata.outputs.module_id }}.zip .
 
+      # How to install, above the generated notes: modules not listed on foundryvtt.com get the steps and the clip
+      - name: Write install note
+        env:
+          FOUNDRY_LISTED: ${{ secrets.FOUNDRY_RELEASE_TOKEN != '' }}
+        run: node build/release-notes.mjs > .release/notes.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.metadata.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
           name: ${{ steps.metadata.outputs.tag_name }}
+          body_path: .release/notes.md
           generate_release_notes: true
           files: |
             .release/package/module.json
