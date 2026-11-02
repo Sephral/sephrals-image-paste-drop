@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026103102;
+export const CATALOG_REVISION = 2026110201;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -104,6 +104,9 @@ const CATALOG = [
   { id: "sephrals-saved-encounters", title: "Saved Encounters", listed: false,
     text: { en: "Save monsters as an encounter and place the whole group again with one click.",
       de: "Speichere Monster als Begegnung und stell die ganze Gruppe mit einem Klick wieder auf." } },
+  { id: "sephrals-swift-dice", title: "Swift Dice", listed: false,
+    text: { en: "Light 3D dice for every roll, the same throw on every screen.",
+      de: "Leichte 3D-Würfel für jeden Wurf, auf jedem Bildschirm derselbe Wurf." } },
   { id: "sephrals-table-compass", title: "Table Compass", listed: true,
     text: { en: "Anonymous feedback from your players on pace and tension.",
       de: "Anonyme Rückmeldung deiner Spieler zu Tempo und Spannung." } },
