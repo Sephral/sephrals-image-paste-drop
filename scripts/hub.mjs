@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026110401;
+export const CATALOG_REVISION = 2026110501;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -95,16 +95,16 @@ const CATALOG = [
   { id: "sephrals-roll-breakdown", title: "Roll Breakdown", listed: true,
     text: { en: "Shows where every number of a roll comes from, right on the chat card.",
       de: "Zeigt direkt auf der Chatkarte, woher jede Zahl eines Wurfs kommt." } },
-  { id: "sephrals-roll-requests", title: "Roll Requests", listed: false, supports: ["crucible", "dnd5e", "pf2e", "swade"],
+  { id: "sephrals-roll-requests", title: "Roll Requests", listed: true, supports: ["crucible", "dnd5e", "pf2e", "swade"],
     text: { en: "Ask any group for a check or save and get one live result card.",
       de: "Fordere Proben oder Rettungswürfe an und bekomm eine einzige Ergebniskarte." } },
   { id: "sephrals-roll-triggers", title: "Roll Triggers", listed: true,
     text: { en: "Natural 20s, fumbles and doubles set off your house rules.",
       de: "Natürliche 20, Patzer und Paschs lösen eure Hausregeln aus." } },
-  { id: "sephrals-saved-encounters", title: "Saved Encounters", listed: false,
+  { id: "sephrals-saved-encounters", title: "Saved Encounters", listed: true,
     text: { en: "Save monsters as an encounter and place the whole group again with one click.",
       de: "Speichere Monster als Begegnung und stell die ganze Gruppe mit einem Klick wieder auf." } },
-  { id: "sephrals-swift-dice", title: "Swift Dice", listed: false,
+  { id: "sephrals-swift-dice", title: "Swift Dice", listed: true,
     text: { en: "Light 3D dice for every roll, the same throw on every screen.",
       de: "Leichte 3D-Würfel für jeden Wurf, auf jedem Bildschirm derselbe Wurf." } },
   { id: "sephrals-table-compass", title: "Table Compass", listed: true,
