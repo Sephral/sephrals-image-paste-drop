@@ -74,7 +74,7 @@ const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
 const DROP_INDICATOR_SETTING = "dropIndicator";
 const DROP_TIP_SETTING = "dropTipDismissed";
 // The Foundry version the module was verified against (see the self-test).
-const TESTED_VERSIONS = Object.freeze({core: "14.369"});
+const TESTED_VERSIONS = Object.freeze({core: "14.370"});
 const MAX_IMAGE_SIZE_CHOICES = Object.freeze([0, 2048, 4096, 8192]);
 const WORLD_STORAGE_ROOT = MODULE_ID;
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
