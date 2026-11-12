@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026111202;
+export const CATALOG_REVISION = 2026111203;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -141,6 +141,18 @@ const INTEGRATIONS = [
   { module: "sephrals-deep-tables", with: "sephrals-loot-ledger",
     text: { en: "Adds what a table rolled to Loot Ledger with one click.",
       de: "Legt mit einem Klick in den Loot Ledger, was eine Tabelle gewürfelt hat." } },
+  { module: "sephrals-saved-encounters", with: "sephrals-deep-tables",
+    text: { en: "A Deep Tables result places one of your saved encounters on the map, as many groups as the table rolled.",
+      de: "Ein Ergebnis in Deep Tables stellt eine deiner gespeicherten Begegnungen auf die Karte, so viele Gruppen, wie die Tabelle gewürfelt hat." } },
+  { module: "sephrals-deep-tables", with: "sephrals-saved-encounters",
+    text: { en: "A table result places a saved encounter on the map with one click, and you can undo it.",
+      de: "Ein Tabellenergebnis stellt mit einem Klick eine gespeicherte Begegnung auf die Karte, und du kannst es rückgängig machen." } },
+  { module: "sephrals-roll-triggers", with: "sephrals-deep-tables",
+    text: { en: "When a trigger rolls a table, Deep Tables rolls it with tables inside tables and one clear card.",
+      de: "Würfelt ein Auslöser auf eine Tabelle, übernimmt Deep Tables mit Tabellen in Tabellen und einer klaren Karte." } },
+  { module: "sephrals-deep-tables", with: "sephrals-roll-triggers",
+    text: { en: "A natural 20 or any other trigger rolls your table with the full Deep Tables card.",
+      de: "Eine natürliche 20 oder ein anderer Auslöser würfelt deine Tabelle mit der vollen Karte von Deep Tables." } },
   { module: "sephrals-loot-ledger", with: "sephrals-saved-encounters",
     text: { en: "Saved Encounters rolls its loot tables into Loot Ledger, where your players claim the items.",
       de: "Saved Encounters würfelt seine Beutetabellen in den Loot Ledger, dort beanspruchen deine Spieler die Gegenstände." } },
