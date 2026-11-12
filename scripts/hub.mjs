@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026110501;
+export const CATALOG_REVISION = 2026111201;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -68,6 +68,9 @@ const CATALOG = [
   { id: "sephrals-handout-lens", title: "Handout Lens", listed: true,
     text: { en: "Zoom, pan and a reading lens for every picture you show your players.",
       de: "Zoomen, verschieben und eine Leselupe für jedes Bild, das du deinen Spielern zeigst." } },
+  { id: "sephrals-deep-tables", title: "Deep Tables", listed: false, released: false,
+    text: { en: "Roll tables with a look first, tables inside tables and results that go straight to your players.",
+      de: "Würfeltabellen mit Vorschau, Tabellen in Tabellen und Ergebnisse, die direkt bei deinen Spielern landen." } },
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
     text: { en: "A file manager with two panels for Foundry's storage.",
       de: "Ein Dateimanager mit zwei Fenstern für Foundrys Speicher." } },
@@ -80,6 +83,9 @@ const CATALOG = [
   { id: "sephrals-lunar-almanac", title: "Lunar Almanac", listed: true, needs: "ember",
     text: { en: "Ember's moons and inner realms with their phases at a glance.",
       de: "Embers Monde und innere Reiche mit ihren Phasen auf einen Blick." } },
+  { id: "sephrals-map-pins", title: "Map Pins", listed: false, released: false,
+    text: { en: "Map pins with labels you can always read, numbers, categories and a preview.",
+      de: "Kartenpins mit Beschriftung, die man immer lesen kann, Nummern, Kategorien und Vorschau." } },
   { id: "sephrals-map-knowledge", title: "Map Knowledge", listed: true, core: 14,
     text: { en: "Reveal parts of the map to your players, right in Foundry's own fog of war.",
       de: "Deck Teile der Karte für deine Spieler auf, direkt in Foundrys eigenem Nebel des Krieges." } },
@@ -116,6 +122,12 @@ const CATALOG = [
   { id: "sephrals-token-tooltips", title: "Token Tooltips", listed: true, supports: ["crucible", "dnd5e", "pf2e", "swade"],
     text: { en: "Health, armor and conditions when you hover over a token.",
       de: "Leben, Rüstung und Zustände, sobald du über ein Token fährst." } },
+  { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false, released: false,
+    text: { en: "Outfits for every character: portrait and token change together with one click.",
+      de: "Outfits für jede Figur: Porträt und Token wechseln mit einem Klick zusammen." } },
+  { id: "sephrals-update-guard", title: "Update Guard", listed: false, released: false,
+    text: { en: "Updates without surprises: test your world, find the module behind a problem and get back.",
+      de: "Updates ohne Überraschungen: Welt testen, das Modul hinter einem Problem finden und zurückkehren." } },
   { id: "sephrals-vista-portrait-switcher", title: "Vista Portrait Switcher", listed: true, needs: "ember",
     text: { en: "Switch the portraits NPCs show in Ember's Vista scenes.",
       de: "Wechsle die Porträts, die NSC in Embers Vista-Szenen zeigen." } }
@@ -123,6 +135,12 @@ const CATALOG = [
 
 /** Modules that use each other: module gains something in a world where with is active. */
 const INTEGRATIONS = [
+  { module: "sephrals-loot-ledger", with: "sephrals-deep-tables",
+    text: { en: "Deep Tables sends what a table rolled straight into Loot Ledger, where your players claim it.",
+      de: "Deep Tables schickt, was eine Tabelle gewürfelt hat, direkt in den Loot Ledger, dort beanspruchen es deine Spieler." } },
+  { module: "sephrals-deep-tables", with: "sephrals-loot-ledger",
+    text: { en: "Adds what a table rolled to Loot Ledger with one click.",
+      de: "Legt mit einem Klick in den Loot Ledger, was eine Tabelle gewürfelt hat." } },
   { module: "sephrals-loot-ledger", with: "sephrals-saved-encounters",
     text: { en: "Saved Encounters rolls its loot tables into Loot Ledger, where your players claim the items.",
       de: "Saved Encounters würfelt seine Beutetabellen in den Loot Ledger, dort beanspruchen deine Spieler die Gegenstände." } },
