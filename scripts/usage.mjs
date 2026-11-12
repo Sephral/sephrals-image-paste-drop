@@ -14,7 +14,7 @@
 /* -------------------------------------------- */
 
 /** Version of this file. Raise it with every change; the newest copy in a world runs for all modules. */
-export const LIB_VERSION = 4;
+export const LIB_VERSION = 5;
 
 /** Version of the ping format ("v"). Raise it only for breaking changes; the server keeps a parser per version. */
 export const FORMAT_VERSION = 1;
@@ -391,7 +391,7 @@ function processErrors(reg) {
     const location = errorLocation(stack, ids);
     if ( !location ) continue;
     const entry = moduleEntry(dayEntry(run.state, today()), location.module);
-    const key = `${location.at}|${/^[A-Za-z][A-Za-z0-9]{0,39}$/.test(type) ? type : ""}`;
+    const key = `${location.at}|${/^[A-Za-z][A-Za-z0-9]{0,39}$/.test(type) ? type : ""}|${location.origin}`;
     entry.e ??= {};
     entry.e[key] = Math.min((entry.e[key] ?? 0) + 1, 10_000);
   }
@@ -400,16 +400,29 @@ function processErrors(reg) {
 
 /**
  * The first stack frame inside a Sephral module: module id and "path:line" relative to the module folder. Host, user
- * folders (The Forge) and query strings are cut off.
+ * folders (The Forge) and query strings are cut off. Since library 5 also where the error arose, from the frames above:
+ * "own" (the module itself), "sephral" (another of Sephral's modules), "module" (any other module), "system" (the game
+ * system) or "core" (Foundry or the browser, called from the module). Never the name of another package.
  * @param {string} stack
  * @param {Set<string>} ids    Module ids to attribute to
- * @returns {{module: string, at: string}|null}
+ * @returns {{module: string, at: string, origin: string}|null}
  */
 export function errorLocation(stack, ids) {
+  let origin = "";
+  let framesAbove = false;
   for ( const line of String(stack).split("\n") ) {
     const match = /\/modules\/(sephrals-[a-z0-9-]+)\/([A-Za-z0-9_./-]+?)(?:\?[^:\s)]*)?:(\d+)(?::\d+)?/.exec(line);
-    if ( !match || !ids.has(match[1]) || match[2].includes("..") ) continue;
-    return {module: match[1], at: `${match[2]}:${match[3]}`};
+    if ( match && ids.has(match[1]) && !match[2].includes("..") ) {
+      return {module: match[1], at: `${match[2]}:${match[3]}`, origin: origin || (framesAbove ? "core" : "own")};
+    }
+    // Only real frames with a line count, not the message line or native frames like "at JSON.parse (<anonymous>)"
+    if ( origin || !/:\d+:\d+\)?\s*$/.test(line) ) continue;
+    // libWrapper only passes calls through, the frame below it names the real caller
+    const pkg = /\/(modules|systems)\/([A-Za-z0-9_.-]+)\//.exec(line);
+    if ( pkg?.[2] === "lib-wrapper" ) continue;
+    if ( !pkg ) framesAbove = true;
+    else if ( pkg[1] === "systems" ) origin = "system";
+    else origin = pkg[2].startsWith("sephrals-") ? "sephral" : "module";
   }
   return null;
 }
@@ -723,8 +736,8 @@ function moduleUsage(days, registered) {
     features,
     settings,
     errors: Object.entries(errors).sort((a, b) => b[1] - a[1]).slice(0, MAX_ERRORS).map(([key, n]) => {
-      const [at, type] = key.split("|");
-      return {at, type, n: Math.min(n, 10_000)};
+      const [at, type, origin] = key.split("|");
+      return {at, type, n: Math.min(n, 10_000), ...(origin ? {origin} : {})};
     })
   };
 }
@@ -1035,7 +1048,7 @@ const TEXT = {
       "Whether the world is hosted on The Forge and which browser family the GM uses (Chrome/Edge, Firefox, Safari, or Foundry app)",
       "Which of Sephral’s modules are installed, their versions, and whether they are enabled",
       "For each enabled module: days used in the last 30 days, feature usage counts, and selected settings (e.g. theme)",
-      "Errors in module code, including source file, line number, error type, and count, but never error messages",
+      "Errors in module code, including source file, line number, error type, whether they arose in the module itself, in another module, in the game system or in Foundry, and count, but never error messages",
       "How many of the last 30 days the GM opened Foundry and the total number of active modules (count only)",
       "Whether these third-party modules are active: Dice So Nice, Ember, Item Piles, libWrapper, Midi QoL, Ready Set Roll, Seasons & Stars, socketlib, and Tidy 5e Sheet",
       "A randomly generated, persistent world ID to associate reports with the same world and allow deletion on request"
@@ -1074,7 +1087,7 @@ const TEXT = {
       "Ob die Welt auf The Forge läuft und welche Browser-Familie die SL verwendet (Chrome/Edge, Firefox, Safari oder Foundry-App)",
       "Welche Sephral’s Module installiert sind, ihre Versionen und ob sie aktiviert sind",
       "Je aktiviertem Modul: Nutzungstage der letzten 30 Tage, Häufigkeit einzelner Funktionen und ausgewählte Einstellungen (z. B. Theme)",
-      "Fehler im Modulcode mit Quelldatei, Zeilennummer, Fehlertyp und Anzahl, aber ohne Fehlermeldungen",
+      "Fehler im Modulcode mit Quelldatei, Zeilennummer, Fehlertyp, ob sie im Modul selbst, in einem anderen Modul, im Spielsystem oder in Foundry entstanden, und Anzahl, aber ohne Fehlermeldungen",
       "An wie vielen der letzten 30 Tage die SL Foundry geöffnet hatte und wie viele Module insgesamt aktiv sind (nur die Anzahl)",
       "Ob diese Fremdmodule aktiv sind: Dice So Nice, Ember, Item Piles, libWrapper, Midi QoL, Ready Set Roll, Seasons & Stars, socketlib und Tidy 5e Sheet",
       "Eine zufällig erzeugte, gleichbleibende Welt-ID, um Berichte derselben Welt zuzuordnen und auf Wunsch löschen zu können"

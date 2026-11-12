@@ -241,7 +241,7 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
 * the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP* and *Show the drop target while dragging* (only the chosen option)
-* where errors occur in the module code: file, line and error type, never the error message
+* where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 
 No names, chat messages, notes, dice results or other content of the world are sent.
 
