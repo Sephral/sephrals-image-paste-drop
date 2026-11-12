@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026111201;
+export const CATALOG_REVISION = 2026111202;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -68,7 +68,7 @@ const CATALOG = [
   { id: "sephrals-handout-lens", title: "Handout Lens", listed: true,
     text: { en: "Zoom, pan and a reading lens for every picture you show your players.",
       de: "Zoomen, verschieben und eine Leselupe für jedes Bild, das du deinen Spielern zeigst." } },
-  { id: "sephrals-deep-tables", title: "Deep Tables", listed: false, released: false,
+  { id: "sephrals-deep-tables", title: "Deep Tables", listed: false,
     text: { en: "Roll tables with a look first, tables inside tables and results that go straight to your players.",
       de: "Würfeltabellen mit Vorschau, Tabellen in Tabellen und Ergebnisse, die direkt bei deinen Spielern landen." } },
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
@@ -83,7 +83,7 @@ const CATALOG = [
   { id: "sephrals-lunar-almanac", title: "Lunar Almanac", listed: true, needs: "ember",
     text: { en: "Ember's moons and inner realms with their phases at a glance.",
       de: "Embers Monde und innere Reiche mit ihren Phasen auf einen Blick." } },
-  { id: "sephrals-map-pins", title: "Map Pins", listed: false, released: false,
+  { id: "sephrals-map-pins", title: "Map Pins", listed: false,
     text: { en: "Map pins with labels you can always read, numbers, categories and a preview.",
       de: "Kartenpins mit Beschriftung, die man immer lesen kann, Nummern, Kategorien und Vorschau." } },
   { id: "sephrals-map-knowledge", title: "Map Knowledge", listed: true, core: 14,
@@ -122,10 +122,10 @@ const CATALOG = [
   { id: "sephrals-token-tooltips", title: "Token Tooltips", listed: true, supports: ["crucible", "dnd5e", "pf2e", "swade"],
     text: { en: "Health, armor and conditions when you hover over a token.",
       de: "Leben, Rüstung und Zustände, sobald du über ein Token fährst." } },
-  { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false, released: false,
+  { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false,
     text: { en: "Outfits for every character: portrait and token change together with one click.",
       de: "Outfits für jede Figur: Porträt und Token wechseln mit einem Klick zusammen." } },
-  { id: "sephrals-update-guard", title: "Update Guard", listed: false, released: false,
+  { id: "sephrals-update-guard", title: "Update Guard", listed: false,
     text: { en: "Updates without surprises: test your world, find the module behind a problem and get back.",
       de: "Updates ohne Überraschungen: Welt testen, das Modul hinter einem Problem finden und zurückkehren." } },
   { id: "sephrals-vista-portrait-switcher", title: "Vista Portrait Switcher", listed: true, needs: "ember",
