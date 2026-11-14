@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026111401;
+export const CATALOG_REVISION = 2026111402;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -74,6 +74,9 @@ const CATALOG = [
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
     text: { en: "A file manager with two panels for Foundry's storage.",
       de: "Ein Dateimanager mit zwei Fenstern für Foundrys Speicher." } },
+  { id: "sephrals-first-table", title: "First Table", listed: false,
+    text: { en: "A short guided first session for new players, step by step, while you prepare the game.",
+      de: "Eine kurze Führung durch die erste Sitzung für neue Spieler, Schritt für Schritt, während du das Spiel vorbereitest." } },
   { id: "sephrals-image-paste-drop", title: "Image Paste & Drop", listed: true,
     text: { en: "Paste or drop an image and turn it into a scene, tile or journal page.",
       de: "Füg ein Bild ein oder zieh es herein und mach daraus eine Szene, ein Tile oder eine Journalseite." } },
