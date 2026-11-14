@@ -11,11 +11,18 @@ import {
   DEFAULT_GRID_SIZE,
   GRID_MIN_SIZE,
   countSquares,
+  countCells,
   detectGridFromFileName,
   fitSceneToGrid,
+  gridFamily,
+  gridFromMeasure,
+  gridOrigin,
   normalizeGridChoice,
+  shiftForAnchor,
   sizeForColumns
 } from "./scene-grid.js";
+import {findGrid, fitGridAt} from "./grid-fit.js";
+import {bindMeasure, describeGrid, drawGridOverlay, guessCellCount, isGridSource} from "./grid-tools.js";
 import {sha256Hex} from "./sha256.js";
 import {
   VIDEO_FILE_EXTENSIONS,
@@ -52,6 +59,7 @@ const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
 const ENABLE_PASTE_SETTING = "enablePasteImport";
 const ENABLE_DROP_SETTING = "enableDropImport";
+const AUTO_GRID_SETTING = "autoGrid";
 const DEFAULT_ACTION_SETTING = "defaultAction";
 const REMEMBER_LAST_ACTION_SETTING = "rememberLastAction";
 const LAST_ACTION_SETTING = "lastAction";
@@ -382,6 +390,15 @@ Hooks.once("init", () => {
     default: true
   });
 
+  game.settings.register(MODULE_ID, AUTO_GRID_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.AutoGrid.Label"),
+    hint: localize("SIPD.Settings.AutoGrid.Hint"),
+    type: Boolean,
+    default: true
+  });
+
   game.settings.register(MODULE_ID, DROP_INDICATOR_SETTING, {
     scope: "client",
     config: true,
@@ -590,8 +607,8 @@ Hooks.once("init", () => {
 
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
-      "contextImport", "itemImage", "dropIndicator"],
-    settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING]
+      "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridFitted", "hexScene"],
+    settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING, AUTO_GRID_SETTING]
   });
 
   registerQuickKeybindings();
@@ -1012,7 +1029,13 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     const dimensions = await readMediaDimensions(objectUrl, {video});
     const optimizePlan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
     // The original name, a copied link or a file such as "Tavern 30x20.webp" may name the grid of a new scene
-    const grid = detectGridFromFileName(file.name, dimensions);
+    let grid = detectGridFromFileName(file.name, dimensions);
+    // Without a grid in the name the picture itself is searched. The dialog opens at once and fills the grid in when
+    // the search is done, a shortcut that creates a scene waits for it.
+    const gridTools = (!video && !grid) ? createGridTools(preparedFile, dimensions) : null;
+    if ( gridTools?.auto && quickTarget && (getQuickAction(quickTarget, {video, context}) === ACTIONS.SCENE_BACKGROUND) ) {
+      grid = (await gridTools.search())?.grid ?? null;
+    }
     const decision = await resolveImportDecision({
       quickTarget,
       context,
@@ -1021,7 +1044,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       optimizePlan,
       sourceType: preparedFile.type,
       video,
-      grid
+      grid,
+      gridTools: grid ? null : gridTools
     });
     if ( !decision ) return;
 
@@ -1084,6 +1108,12 @@ async function resolveImportDecision({quickTarget=null, ...prompt}) {
 
 // The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
 // is not possible right now, for example a token target without a selected token.
+// The grid choice of a grid from the file name or from the picture
+function gridChoiceFromSource(grid) {
+  if ( grid.source === "found" ) return {type: grid.type, size: grid.size, exact: grid.exact, anchor: grid.anchor};
+  return {type: getDefaultGridType(), size: grid.size, columns: grid.columns};
+}
+
 function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=null, context=null}={}) {
   const action = getQuickAction(quickTarget, {remoteUrl, video, context});
   const choice = getActionChoices({remoteUrl, video, context}).find(entry => entry.value === action);
@@ -1101,7 +1131,7 @@ function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=nul
     prototypeToken: true,
     chatMode: CHAT_MODES.CURRENT,
     optimize: true,
-    grid: grid ? {type: getDefaultGridType(), size: grid.size, columns: grid.columns} : null
+    grid: grid ? gridChoiceFromSource(grid) : null
   }, {remoteUrl, video, context});
 }
 
@@ -1303,7 +1333,13 @@ async function handleImportedBatch(files, {dropPoint=null, quickTarget=null}={})
     for ( const [position, item] of items.entries() ) {
       const upload = await prepareUploadFile(item.file, {width: item.width, height: item.height}, {optimize: decision.optimize});
       const path = await uploadClipboardFile(upload.file, {directory: decision.uploadDirectory});
-      const grid = (sceneGrids && item.grid) ? {type: getDefaultGridType(), size: item.grid.size, columns: item.grid.columns} : null;
+      let grid = (sceneGrids && item.grid) ? {type: getDefaultGridType(), size: item.grid.size, columns: item.grid.columns} : null;
+      // A map without a grid in its name is searched for a printed grid, when the user wants that
+      if ( sceneGrids && !item.grid && !item.video ) {
+        const tools = createGridTools(item.file, {width: item.width, height: item.height});
+        const found = tools?.auto ? await tools.search() : null;
+        if ( found?.found ) grid = {type: found.grid.type, size: found.grid.size, exact: found.grid.exact, anchor: found.grid.anchor};
+      }
       const layout = fitSceneToGrid(grid, item, upload);
       results.push({
         path,
@@ -1398,7 +1434,7 @@ function getUrlHostLabel(url) {
 }
 
 async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null}) {
+  video=false, grid=null, context=null, gridTools=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
@@ -1409,7 +1445,8 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
     sourceType,
     video,
     grid,
-    context
+    context,
+    gridTools
   }), {remoteUrl, video, context});
   if ( !decision ) return null;
 
@@ -1700,7 +1737,7 @@ async function readVideoDimensions(src) {
 }
 
 async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null}) {
+  video=false, grid=null, context=null, gridTools=null}) {
   const defaults = getDialogDefaults({remoteUrl, video, context});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
@@ -1708,7 +1745,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
   // Blob and remote URLs are set after rendering. A video plays muted in a loop, like on the canvas.
   const previewMarkup = video
     ? `<video aria-label="${escapeHtml(defaultName)}" data-preview-video autoplay loop muted playsinline></video>`
-    : `<img alt="${escapeHtml(defaultName)}" data-preview-image>`;
+    : `<div class="sipd-preview-stage"><img alt="${escapeHtml(defaultName)}" data-preview-image></div>`;
   const content = `
     <div class="sipd-shell sipd-shell--import" data-ui-theme="${escapeHtml(defaults.uiTheme)}">
       <section class="sipd-hero">
@@ -1762,7 +1799,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 </select>
               </div>
             </div>
-            ${gridFieldsMarkup({width, height, grid})}
+            ${gridFieldsMarkup({width, height, grid, tools: Boolean(gridTools?.enabled)})}
             <div class="form-group sipd-upload-directory-row" data-option-row="uploadDirectory">
               <label>${localize("SIPD.Dialog.UploadDirectory")}</label>
               <div class="form-fields sipd-field-stack">
@@ -1830,7 +1867,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     position: {...importWindowState, height: "auto"},
     content,
     modal: true,
-    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height}),
+    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height, gridTools}),
     buttons: [
       {
         action: "confirm",
@@ -1886,20 +1923,33 @@ function readOptimizeCheckbox(form) {
   return field ? Boolean(field.checked) : true;
 }
 
-// Grid of a new scene. It starts with the grid the file name names, else with Foundry's default size.
+// Grid of a new scene. It starts with the grid the file name names, else with Foundry's default size. The picture itself
+// is searched for a printed grid (see createGridTools), or the grid is measured on the preview.
 // The size and the squares across fill each other in. The field typed in last leads, squares are more exact than
-// the rounded size.
-function gridFieldsMarkup({width, height, grid=null}) {
-  const type = getDefaultGridType();
+// the rounded size. Hidden fields carry what a search or a measurement found: the exact size of a cell and the position
+// of the printed grid (a corner of a square, the center of a hexagon) in pixels of the original image.
+function gridFieldsMarkup({width, height, grid=null, tools=false}) {
+  const found = grid?.source === "found";
+  const type = found ? grid.type : getDefaultGridType();
   const size = grid?.size ?? DEFAULT_GRID_SIZE;
-  const source = grid ? "detected" : "default";
-  const columns = grid?.columns ?? countSquares(width, height, size).columns;
+  const source = grid ? (found ? "found" : "detected") : "default";
+  const columns = grid?.columns ?? countSquares(width, height, grid?.exact ?? size).columns;
   const options = getGridTypeChoices().map(choice => {
     const selected = choice.value === type ? " selected" : "";
     return `<option value="${choice.value}"${selected}>${escapeHtml(choice.label)}</option>`;
   }).join("");
   const pixelsLabel = localize("SIPD.Dialog.GridPixels");
   const columnsLabel = localize("SIPD.Dialog.GridColumns");
+  const toolsMarkup = tools ? `
+                <div class="sipd-grid-tools" data-grid-tools>
+                  <button type="button" class="sipd-grid-button" data-grid-find>${escapeHtml(localize("SIPD.Grid.Find"))}</button>
+                  <button type="button" class="sipd-grid-button" data-grid-measure aria-pressed="false">${escapeHtml(localize("SIPD.Grid.Measure"))}</button>
+                  <span class="sipd-grid-number" data-grid-measure-form hidden>
+                    <input type="number" name="gridMeasureCount" min="1" step="1" value="5" aria-label="${escapeHtml(localize("SIPD.Grid.MeasureCount"))}">
+                    <span>${escapeHtml(localize("SIPD.Grid.MeasureCount"))}</span>
+                    <button type="button" class="sipd-grid-button" data-grid-measure-apply>${escapeHtml(localize("SIPD.Grid.MeasureApply"))}</button>
+                  </span>
+                </div>` : "";
   return `
             <div class="form-group" data-option-row="grid">
               <label>${localize("SIPD.Dialog.Grid")}</label>
@@ -1914,25 +1964,38 @@ function gridFieldsMarkup({width, height, grid=null}) {
                     <input type="number" name="gridColumns" min="1" step="any" value="${columns}" aria-label="${escapeHtml(columnsLabel)}">
                     <span>${escapeHtml(columnsLabel)}</span>
                   </span>
-                </div>
+                </div>${toolsMarkup}
                 <input type="hidden" name="gridSource" value="${source}">
                 <input type="hidden" name="gridLead" value="${grid?.columns ? "columns" : "size"}">
+                <input type="hidden" name="gridExact" value="${found ? grid.exact : ""}">
+                <input type="hidden" name="gridAnchorX" value="${found ? (grid.anchor?.x ?? "") : ""}">
+                <input type="hidden" name="gridAnchorY" value="${found ? (grid.anchor?.y ?? "") : ""}">
                 <small class="sipd-field-hint" data-grid-hint>${escapeHtml(gridHintText({width, height, size, type, source}))}</small>
               </div>
             </div>`;
 }
 
-// "30 x 20 squares" for a square grid, and where the size comes from. A size below Foundry's minimum is raised to it.
-function gridHintText({width, height, size, type, source}) {
-  const parts = [];
+// "30 x 20 squares" for a square grid, "30 x 17 hexagons" for hexagons, and where the grid comes from. A size below
+// Foundry's minimum is raised to it. A notice names something that happened after the grid fields were filled.
+function gridHintText({width, height, size, type, source, notice=null}) {
   if ( (Number(size) > 0) && (Number(size) < GRID_MIN_SIZE) ) return localize("SIPD.Dialog.GridMinimum", {min: GRID_MIN_SIZE});
-  if ( (Number(type) === getGridTypes().SQUARE) && (Number(size) >= GRID_MIN_SIZE) ) {
-    const {columns, rows} = countSquares(width, height, size);
-    parts.push(localize("SIPD.Dialog.GridSquares", {columns: formatNumber(columns), rows: formatNumber(rows)}));
-  }
-  if ( source === "detected" ) parts.push(localize("SIPD.Dialog.GridDetected"));
-  else if ( source === "default" ) parts.push(localize("SIPD.Dialog.GridDefault"));
-  return parts.join(" ");
+  const family = gridFamily(type, getGridTypes());
+  const counts = (family && (Number(size) >= GRID_MIN_SIZE) && (source !== "searching")) ? countCells(width, height, size, type, getGridTypes()) : null;
+  const text = {
+    squares: ({columns, rows}) => localize("SIPD.Dialog.GridSquares", {columns: formatNumber(columns), rows: formatNumber(rows)}),
+    hexagons: ({columns, rows}) => localize("SIPD.Dialog.GridHexagons", {columns: formatNumber(columns), rows: formatNumber(rows)}),
+    fromName: localize("SIPD.Dialog.GridDetected"),
+    found: localize("SIPD.Grid.Found"),
+    measured: localize("SIPD.Grid.Measured"),
+    searching: localize("SIPD.Grid.Searching"),
+    none: localize("SIPD.Grid.NotFound"),
+    unreadable: localize("SIPD.Grid.Unreadable"),
+    measureHint: localize("SIPD.Grid.MeasureHint"),
+    fallback: localize("SIPD.Dialog.GridDefault")
+  };
+  const line = describeGrid({source, family, counts}, text);
+  const extra = notice ? (text[notice] ?? "") : "";
+  return extra ? `${line} ${extra}`.trim() : line;
 }
 
 function formatNumber(value) {
@@ -1943,53 +2006,223 @@ function formatNumber(value) {
   }
 }
 
-// The grid stays Foundry's default until the file name names one or a grid field is changed. Squares across count
-// when they were typed in last on a square grid.
+// The grid stays Foundry's default until the file name names one, a search or measurement finds one or a grid field is
+// changed. Squares across count when they were typed in last on a square grid.
 function readGridChoice(form) {
   const elements = form?.elements ?? {};
-  if ( !elements.gridSize || (elements.gridSource?.value === "default") ) return null;
+  if ( !elements.gridSize || !isGridSource(elements.gridSource?.value) ) return null;
   const type = Number(elements.gridType?.value);
   const columns = Number(elements.gridColumns?.value);
   const byColumns = (elements.gridLead?.value === "columns") && (type === getGridTypes().SQUARE) && (columns > 0);
-  return {type, size: Number(elements.gridSize.value), ...(byColumns ? {columns} : {})};
+  const exact = Number(elements.gridExact?.value);
+  const hasAnchor = (String(elements.gridAnchorX?.value ?? "") !== "") && (String(elements.gridAnchorY?.value ?? "") !== "");
+  return {
+    type,
+    size: Number(elements.gridSize.value),
+    ...(byColumns ? {columns} : {}),
+    ...((exact > 0) ? {exact} : {}),
+    ...(hasAnchor ? {anchor: {x: Number(elements.gridAnchorX.value), y: Number(elements.gridAnchorY.value)}} : {})
+  };
 }
 
-function bindGridFields(form, {width, height}={}) {
+// The grid search of a picture for the dialog or a shortcut. The search runs once, the buttons run it again or fit a
+// measured size. `enabled` shows the buttons, `auto` searches by itself.
+function createGridTools(file, dimensions) {
+  if ( !canUserPerformAction(ACTIONS.SCENE_BACKGROUND) || (typeof globalThis.createImageBitmap !== "function") ) return null;
+  let auto = true;
+  try {
+    auto = Boolean(game.settings.get(MODULE_ID, AUTO_GRID_SETTING));
+  } catch (_error) {
+    auto = true;
+  }
+  const run = async () => {
+    let result;
+    try {
+      result = await findGrid(file, {...dimensions, types: getGridTypes()});
+    } catch ( error ) {
+      console.warn(`${MODULE_ID} | Grid search failed`, error);
+      result = {found: false, reason: "unreadable"};
+    }
+    if ( result.found ) countFeature(MODULE_ID, "gridFound");
+    else if ( result.reason === "noGrid" ) countFeature(MODULE_ID, "gridNotFound");
+    return result;
+  };
+  let pending = null;
+  return {
+    enabled: true,
+    auto,
+    search: () => (pending ??= run()),
+    find: run,
+    fit: async ({type, size}) => {
+      try {
+        return await fitGridAt(file, {...dimensions, type, size, types: getGridTypes()});
+      } catch (_error) {
+        return {found: false, reason: "unreadable"};
+      }
+    }
+  };
+}
+
+function bindGridFields(form, {width, height, gridTools=null, previewImage=null}={}) {
   const elements = form?.elements ?? {};
-  const {gridType, gridSize, gridColumns, gridSource, gridLead} = elements;
+  const {gridType, gridSize, gridColumns, gridSource, gridLead, gridExact, gridAnchorX, gridAnchorY} = elements;
   if ( !gridType || !gridSize || !gridColumns || !gridSource ) return;
   const squaresField = form.querySelector("[data-grid-squares]");
   const hint = form.querySelector("[data-grid-hint]");
+  const overlay = form.querySelector?.("[data-grid-overlay]");
+  const types = getGridTypes();
+  const NO_GRID = ["default", "searching", "none", "unreadable"];
+  let notice = null;
 
+  const exactSize = () => (Number(gridExact?.value) > 0 ? Number(gridExact.value) : Number(gridSize.value));
+  const redrawOverlay = () => {
+    if ( !overlay || !previewImage ) return;
+    const choice = readGridChoice(form);
+    const shown = choice
+      ? {type: choice.type, exact: choice.exact ?? (choice.columns ? width / choice.columns : choice.size), anchor: choice.anchor ?? null}
+      : null;
+    drawGridOverlay(overlay, previewImage, shown, {width, height}, types);
+    measure?.redraw();
+  };
+  const repaintBase = () => {
+    const choice = readGridChoice(form);
+    const shown = choice
+      ? {type: choice.type, exact: choice.exact ?? (choice.columns ? width / choice.columns : choice.size), anchor: choice.anchor ?? null}
+      : null;
+    drawGridOverlay(overlay, previewImage, shown, {width, height}, types);
+  };
   const refresh = () => {
-    const square = Number(gridType.value) === getGridTypes().SQUARE;
+    const square = Number(gridType.value) === types.SQUARE;
     if ( squaresField ) squaresField.hidden = !square;
     if ( hint ) {
-      hint.textContent = gridHintText({width, height, size: Number(gridSize.value), type: gridType.value, source: gridSource.value});
+      hint.textContent = gridHintText({width, height, size: exactSize(), type: gridType.value, source: gridSource.value, notice});
     }
+    redrawOverlay();
+  };
+  const clearFound = ({keepAnchor=false}={}) => {
+    if ( gridExact ) gridExact.value = "";
+    if ( !keepAnchor && gridAnchorX ) gridAnchorX.value = "";
+    if ( !keepAnchor && gridAnchorY ) gridAnchorY.value = "";
   };
   const changed = lead => {
+    notice = null;
     gridSource.value = "manual";
     if ( lead && gridLead ) gridLead.value = lead;
   };
 
   gridSize.addEventListener("input", () => {
     changed("size");
+    clearFound({keepAnchor: true});
     const size = Number(gridSize.value);
     if ( size >= GRID_MIN_SIZE ) gridColumns.value = String(countSquares(width, height, size).columns);
     refresh();
   });
   gridColumns.addEventListener("input", () => {
     changed("columns");
+    clearFound({keepAnchor: true});
     const size = sizeForColumns(width, gridColumns.value);
     if ( size ) gridSize.value = String(size);
     refresh();
   });
+  let family = gridFamily(gridType.value, types);
   gridType.addEventListener("change", () => {
     changed();
+    // The position of a printed grid only fits the same kind of grid. Odd and even rows keep it.
+    const next = gridFamily(gridType.value, types);
+    if ( next !== family ) clearFound();
+    family = next;
     refresh();
   });
+
+  // Puts a grid from the search or a measurement into the fields
+  const apply = (grid, source) => {
+    notice = null;
+    gridType.value = String(grid.type);
+    gridSize.value = String(grid.size);
+    if ( gridExact ) gridExact.value = String(grid.exact ?? "");
+    if ( gridAnchorX ) gridAnchorX.value = grid.anchor ? String(grid.anchor.x) : "";
+    if ( gridAnchorY ) gridAnchorY.value = grid.anchor ? String(grid.anchor.y) : "";
+    gridColumns.value = String(countSquares(width, height, grid.exact ?? grid.size).columns);
+    if ( gridLead ) gridLead.value = "size";
+    gridSource.value = source;
+    family = gridFamily(grid.type, types);
+    refresh();
+  };
+  // A search that finds nothing keeps what was typed in. Only the default turns into the "none" note.
+  const reportMissing = reason => {
+    const status = (reason === "unreadable") ? "unreadable" : "none";
+    if ( NO_GRID.includes(gridSource.value) ) gridSource.value = status;
+    else notice = status;
+    refresh();
+  };
+  const search = async ({force=false}={}) => {
+    if ( !gridTools ) return;
+    const wasEmpty = NO_GRID.includes(gridSource.value);
+    if ( wasEmpty ) gridSource.value = "searching";
+    notice = null;
+    refresh();
+    const result = await (force ? gridTools.find() : gridTools.search());
+    if ( !form.isConnected ) return;
+    // The user typed a grid while the search ran, it stays
+    if ( wasEmpty && (gridSource.value !== "searching") && !force ) return;
+    if ( result.found ) apply(result.grid, "found");
+    else {
+      if ( gridSource.value === "searching" ) gridSource.value = "default";
+      reportMissing(result.reason);
+    }
+  };
+
+  // Measuring by dragging across a few cells on the preview
+  const measureButton = form.querySelector?.("[data-grid-measure]");
+  const measureForm = form.querySelector?.("[data-grid-measure-form]");
+  const measureCount = elements.gridMeasureCount;
+  let measured = null;
+  const measure = (overlay && previewImage && measureButton)
+    ? bindMeasure(overlay, previewImage, {width, height}, {
+      repaint: repaintBase,
+      onMeasured: result => {
+        measured = result;
+        const length = Math.max(Math.abs(result.to.x - result.from.x), Math.abs(result.to.y - result.from.y));
+        if ( measureCount ) measureCount.value = String(guessCellCount(length, exactSize()));
+        if ( measureForm ) measureForm.hidden = false;
+        measureCount?.focus?.();
+      }
+    })
+    : null;
+  const setMeasuring = active => {
+    if ( !measure ) return;
+    measure.active = active;
+    measureButton.setAttribute("aria-pressed", String(active));
+    form.closest?.(".sipd-import-dialog")?.classList.toggle("is-measuring", active);
+    if ( !active && measureForm ) measureForm.hidden = true;
+    notice = active ? "measureHint" : null;
+    refresh();
+  };
+  measureButton?.addEventListener("click", () => setMeasuring(!measure?.active));
+  form.querySelector?.("[data-grid-find]")?.addEventListener("click", () => {
+    void search({force: true});
+  });
+  form.querySelector?.("[data-grid-measure-apply]")?.addEventListener("click", async () => {
+    if ( !measured ) return;
+    const selected = Number(gridType.value);
+    const type = gridFamily(selected, types) ? selected : types.SQUARE;
+    const grid = gridFromMeasure({from: measured.from, to: measured.to, count: measureCount?.value, family: gridFamily(type, types)});
+    setMeasuring(false);
+    if ( !grid ) return;
+    let result = {type, size: Math.round(grid.size), exact: grid.size, anchor: grid.anchor};
+    // The picture itself puts the grid exactly where its lines are, the drag only has to be near
+    const fitted = gridTools ? await gridTools.fit({type, size: grid.size}) : null;
+    if ( fitted?.found && (gridFamily(fitted.grid.type, types) === gridFamily(type, types)) ) result = {...fitted.grid, type: fitted.grid.type};
+    apply(result, "measured");
+    countFeature(MODULE_ID, "gridMeasured");
+  });
+  if ( previewImage ) {
+    previewImage.addEventListener?.("load", redrawOverlay);
+    if ( typeof ResizeObserver === "function" ) new ResizeObserver(() => redrawOverlay()).observe(previewImage);
+  }
+
   refresh();
+  if ( gridTools?.auto && (gridSource.value === "default") ) void search();
 }
 
 // No recipient checked means everyone
@@ -2123,7 +2356,7 @@ function actionUsesSelectableUploadDirectory(action) {
   return getActionBehavior(action).supportsUploadDirectory;
 }
 
-function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0}={}) {
+function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0, gridTools=null}={}) {
   const form = dialog.element.querySelector("form");
   if ( !form ) return;
 
@@ -2197,7 +2430,16 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
   actionField.addEventListener("change", updateFields);
   shareToPlayersField.addEventListener?.("change", updateFields);
   updateFields();
-  bindGridFields(form, {width, height});
+  // Foundry's dialog markup drops canvas elements, so the overlay for the grid over the preview is added here
+  const stage = form.querySelector(".sipd-preview-stage");
+  if ( stage && gridTools && !stage.querySelector("[data-grid-overlay]") ) {
+    const overlay = document.createElement("canvas");
+    overlay.className = "sipd-grid-overlay";
+    overlay.dataset.gridOverlay = "";
+    overlay.setAttribute("aria-hidden", "true");
+    stage.append(overlay);
+  }
+  bindGridFields(form, {width, height, gridTools, previewImage: form.querySelector("[data-preview-image]")});
 }
 
 // The last target when it is reused, else the default target
@@ -2533,7 +2775,14 @@ function hasCanvasScene() {
 }
 
 // Without a grid from the file name or the dialog the scene keeps the grid Foundry and the system give it.
+// A grid found on the map or measured on it carries the position of the printed grid. The scene is shifted so that
+// Foundry's grid lies on it (v14 shiftX and shiftY, v13 the offset of the background).
 async function createSceneFromImage({name, path, width, height, activateScene, navigation, grid=null}, {notify=true}={}) {
+  const shift = grid?.anchor ? shiftForAnchor(grid, grid.anchor, getGridTypes()) : null;
+  const shiftData = !shift ? {}
+    : (Number(game.release?.generation) >= 14
+      ? {shiftX: shift.x, shiftY: shift.y}
+      : {background: {offsetX: shift.x, offsetY: shift.y}});
   const scene = await Scene.create({
     name,
     navigation,
@@ -2541,8 +2790,11 @@ async function createSceneFromImage({name, path, width, height, activateScene, n
     width,
     height,
     padding: 0,
-    ...(grid ? {grid: {type: grid.type, size: grid.size}} : {})
+    ...(grid ? {grid: {type: grid.type, size: grid.size}} : {}),
+    ...shiftData
   });
+  if ( grid?.anchor ) countFeature(MODULE_ID, "gridFitted");
+  if ( grid && /^rows|columns$/.test(gridFamily(grid.type, getGridTypes()) ?? "") ) countFeature(MODULE_ID, "hexScene");
 
   await applyImageToSceneLevel(scene, {path, width, height});
 
@@ -3605,6 +3857,7 @@ async function checkIntegrations() {
   check((typeof board?.canvasCoordinatesFromClient === "function") && (typeof board?.clientCoordinatesFromCanvas === "function")
     && (typeof foundry.applications?.instances?.get === "function"), "DropTargets");
   check(game.i18n.has("SIPD.Dialog.Title"), "Texts");
+  check(checkGridGeometry(), "GridFit");
 
   if ( game.settings.get(MODULE_ID, CONVERT_WEBP_SETTING) ) {
     const canvas = document.createElement("canvas");
@@ -3619,6 +3872,30 @@ async function checkIntegrations() {
     check(roles.some(role => role < CONST.USER_ROLES.GAMEMASTER), "PlayerUpload");
   }
   return {problems, checks};
+}
+
+// The grid fit assumes where Foundry puts its first square and first hexagon (the scene shift is computed from that)
+// and reads the pixels of the map through the browser. Verified against Foundry's own grid classes.
+function checkGridGeometry() {
+  try {
+    if ( typeof globalThis.createImageBitmap !== "function" ) return false;
+    const types = getGridTypes();
+    const size = 100;
+    const classes = foundry.grid ?? {};
+    if ( !classes.SquareGrid || !classes.HexagonalGrid ) return false;
+    const square = new classes.SquareGrid({size}).getTopLeftPoint({i: 0, j: 0});
+    const expected = gridOrigin(types.SQUARE, size, types);
+    if ( Math.hypot(square.x - expected.x, square.y - expected.y) > 0.01 ) return false;
+    for ( const [type, columns, even] of [[types.HEXODDR, false, false], [types.HEXEVENR, false, true],
+      [types.HEXODDQ, true, false], [types.HEXEVENQ, true, true]] ) {
+      const center = new classes.HexagonalGrid({size, columns, even}).getCenterPoint({i: 0, j: 0});
+      const origin = gridOrigin(type, size, types);
+      if ( Math.hypot(center.x - origin.x, center.y - origin.y) > 0.01 ) return false;
+    }
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 // Image Paste & Drop's part of the debug file of Sephral's modules: where uploads go, what players may do, the browser
@@ -3756,6 +4033,7 @@ export const __test__ = {
   DEFAULT_ACTION_SETTING,
   REMEMBER_LAST_ACTION_SETTING,
   LAST_ACTION_SETTING,
+  AUTO_GRID_SETTING,
   DEFAULT_SHARE_SETTING,
   DEFAULT_ACTIVATE_SCENE_SETTING,
   DEFAULT_NAVIGATION_SETTING,
@@ -3813,6 +4091,7 @@ export const __test__ = {
   getGridTypeChoices,
   gridFieldsMarkup,
   gridHintText,
+  createGridTools,
   readGridChoice,
   bindGridFields,
   getPreferredAction,

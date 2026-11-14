@@ -71,18 +71,47 @@ After the start, users who can upload images get a short tip about dropping onto
 
 ## Grid of new scenes
 
-A new scene gets a grid that fits the map when the file name says how big the squares are:
+A new scene gets a grid that fits the map. Where the grid comes from, in this order:
+
+1. The file name says how big the squares are. It always wins, and then the picture is not searched.
+2. The grid printed on the map, found by the module (see [Finding the printed grid](#finding-the-printed-grid)).
+3. What you set in the dialog, by hand or by measuring.
+4. Otherwise the scene keeps Foundry's default of 100 pixels and the grid type of your game system.
+
+File names:
 
 * `30x20`, `30 x 20`, `30×20` or `30_x_20`: the map is 30 squares wide and 20 squares high. The other order works too.
 * `140px` or `140ppi`: one square is 140 pixels.
 
-Squares only count when they fit the image, so a pixel size such as `4096x2048` is no grid. A name only counts with at least 5 squares on each side and at most 600 pixels per square, and aspect ratios such as `16x9` are ignored. Without a grid in the name the scene keeps Foundry's default of 100 pixels.
+Squares only count when they fit the image, so a pixel size such as `4096x2048` is no grid. A name only counts with at least 5 squares on each side and at most 600 pixels per square, and aspect ratios such as `16x9` are ignored.
 
-With *Create a new scene* as target the dialog shows the row *Grid*: the grid type, the size of one square in pixels and, for square grids, how many squares the map is wide. Change one number and the other follows. The grid type starts with the default of your game system. Foundry needs at least 20 pixels per square, a smaller size is raised to 20. An empty size keeps Foundry's default.
+With *Create a new scene* as target the dialog shows the row *Grid*: the grid type (square, or hexagons with odd or even rows or columns), the size of one cell in pixels and, for square grids, how many squares the map is wide. Change one number and the other follows. The grid type starts with the default of your game system. Foundry needs at least 20 pixels per cell, a smaller size is raised to 20. An empty size keeps Foundry's default. Below the row the text tells how many squares or hexagons the map holds and where the grid comes from.
 
-Foundry only takes whole pixels per square. When the squares of a map are not a whole number of pixels, for example 29.5 squares across 3000 pixels or a large map shrunk on upload (see [Smaller files](#smaller-files)), the scene is made a few pixels larger or smaller so that it holds exactly that many squares. Foundry stretches the map to the scene, so its grid stays on the squares drawn into the map.
+Foundry only takes whole pixels per cell. When the cells of a map are not a whole number of pixels, for example 29.5 squares across 3000 pixels, 87.47 pixels per cell or a large map shrunk on upload (see [Smaller files](#smaller-files)), the scene is made a few pixels larger or smaller so that it holds exactly that many cells. Foundry stretches the map to the scene, so its grid stays on the cells drawn into the map.
 
-Several images as one new scene each take the grid from their own file names. Their thumbnails show it while that target is chosen.
+Several images as one new scene each take the grid from their own file names, or the printed grid of each map. The thumbnails show a grid from the name while that target is chosen.
+
+### Finding the printed grid
+
+When a map without a grid in its name becomes a new scene, the module looks at the picture itself. The dialog opens at once, the search runs in the background and fills the grid row when it is done. A yellow outline of the found grid lies over the preview, so you can check it before you insert.
+
+* The module finds square grids and hexagons with a pointy top or a flat top. It tells them apart, and picks the odd or even variant of the hexagon type that needs the smaller shift.
+* It finds the size of a cell down to a fraction of a pixel and the position of the grid. Foundry's grid is then shifted onto the printed one (the scene shift of Foundry 14, the background offset of Foundry 13) and the scene is stretched by a few pixels where needed, see above.
+* A map without a printed grid, or with a grid too faint to be sure about, gets the note *No printed grid found*. The module does not guess: the default grid stays and nothing is drawn over the preview.
+* The cells must be at least 20 pixels (Foundry's minimum) and the map at least 5 cells across. Grids with major lines every fifth cell are read as the finer grid when its lines are visible, else as the major one. Floors made of repeating tiles can look like a grid to the search. The preview is there for that reason.
+* The search works on a copy of the picture reduced to about 1200 pixels and takes one to two seconds. Linked images that the browser cannot read pixel by pixel are not searched. Videos are not searched.
+* The search needs the right to create scenes, so it only runs for GMs and Assistant GMs. The setting *Look for the grid on maps* turns the automatic search off. The buttons stay.
+
+The buttons under the grid row:
+
+* *Find grid* runs the search again, also when the search is off or you changed the fields.
+* *Measure* is for maps without a usable printed grid. The preview becomes large, drag across a few cells from one grid corner to another (hexagons: from center to center along a row, pointy tops sideways, flat tops up and down), type how many cells the line crosses and click *Use*. When there is a printed grid near the line, the module snaps to it and corrects the size. Without one the size is the length of the line divided by the number of cells, and the corner where you started the drag is the grid position.
+
+Typing a size or the squares across keeps the position of the printed grid but drops its exact size, another kind of grid (square, rows, columns) drops both.
+
+Shortcuts: with *Alt+V* to the target *Create a new scene* the module waits for the search and uses the result. The search is part of the shortcut, not of the dialog, so it is skipped when the setting is off.
+
+The self test checks that Foundry places its first square and its first hexagon where the grid fit expects them, which the shift depends on.
 
 ## Videos
 
@@ -204,6 +233,7 @@ Every user can configure on the module settings page:
 * the module language: follow Foundry (including community translations), English or German
 * whether clipboard paste triggers the module
 * whether drag and drop triggers the module
+* whether the printed grid of a map is searched when it becomes a new scene
 * whether the drop target is shown while dragging
 * the default target
 * whether the last successful target is reused automatically (for single images and for batches separately)
@@ -217,7 +247,7 @@ World settings for the GM: player access, additional player targets and the stor
 
 The gear in the title bar of the import window closes it and opens these settings.
 
-*Run self test* (GM) checks the file picker, the storage folder, the targets, WebP in your browser and whether players may upload files. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once.
+*Run self test* (GM) checks the file picker, the storage folder, the targets, the grid placement, WebP in your browser and whether players may upload files. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once.
 
 *Save debug file* (GM) saves a file for bug reports, see [Debug file](#debug-file).
 
@@ -240,7 +270,8 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * on how many of the last 30 days the module was used
 * how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
-* the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP* and *Show the drop target while dragging* (only the chosen option)
+* how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map and how many get a hexagon grid
+* the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP*, *Show the drop target while dragging* and *Look for the grid on maps* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 
 No names, chat messages, notes, dice results or other content of the world are sent.

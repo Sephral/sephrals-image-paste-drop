@@ -929,3 +929,55 @@
     transition: none;
   }
 }
+/* Grid tools of the import dialog: the grid over the preview, the search and the measuring */
+.sipd-preview-stage {
+  position: relative;
+  display: block;
+}
+
+.sipd-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sipd-grid-overlay.is-measuring {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.sipd-grid-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  align-items: center;
+}
+
+.sipd-grid-button {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 1.7rem;
+  margin: 0;
+  padding: 0 0.7rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.sipd-grid-button[aria-pressed="true"] {
+  border-color: var(--sipd-accent);
+  color: var(--sipd-accent);
+}
+
+.sipd-grid-tools .sipd-grid-number[hidden] {
+  display: none;
+}
+
+/* Measuring needs a large preview: the form moves below it */
+.sipd-import-dialog.is-measuring .sipd-dialog {
+  grid-template-columns: 1fr;
+}
+
+.sipd-import-dialog.is-measuring .sipd-panel--preview .sipd-dialog__preview img {
+  max-height: 26rem;
+}

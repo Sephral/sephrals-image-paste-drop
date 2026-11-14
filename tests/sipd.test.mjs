@@ -92,8 +92,8 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 23 module settings and the hidden consent and state settings of the usage library
-  assert.equal(env.state.registerCalls.length, 25);
+  // 24 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 26);
   const indicator = env.state.registerCalls.find((entry) => entry.key === __test__.DROP_INDICATOR_SETTING);
   assert.equal(indicator.data.scope, "client");
   assert.equal(indicator.data.default, true);
@@ -2187,11 +2187,11 @@ test("the grid fields start with the file name's grid and fill each other in", (
     form.elements.gridColumns.dispatch("input");
     assert.equal(form.elements.gridSize.value, "200");
 
-    // Hexagons have no squares to count
+    // Hexagons have no squares across, they get their own count
     form.elements.gridType.value = "2";
     form.elements.gridType.dispatch("change");
     assert.equal(squares.hidden, true);
-    assert.equal(hint.textContent, "");
+    assert.equal(hint.textContent, "SIPD.Dialog.GridHexagons");
     assert.deepEqual(__test__.readGridChoice(form), { type: 2, size: 200 });
 
     assert.equal(__test__.readGridChoice(createGridForm({ source: "default" }).form), null);
@@ -2676,4 +2676,150 @@ test("a shortcut that fails reports the error, a clipboard that fails waits for 
     restore();
     env.state.localizations.delete("SIPD.Notification.Error");
   }
+});
+
+test("a grid found on the map shifts the new scene, on v14 with the scene shift and on v13 with the background offset", async () => {
+  const { ACTIONS } = __test__;
+  env.state.imageBehavior = { width: 4224, height: 2640, error: false };
+  env.state.uploadResponse = { path: "maps/found.png" };
+  const decision = { name: "Found", action: ACTIONS.SCENE_BACKGROUND, activateScene: false, navigation: true,
+    grid: { type: 1, size: 53, exact: 52.8, anchor: { x: 17, y: 29 } } };
+
+  env.game.release = { generation: 14 };
+  env.state.dialogWaitResult = decision;
+  try {
+    await __test__.handleImportedImage(createImageFile("Found.png"));
+    const created = env.state.sceneCreates.at(-1);
+    // 52.8 px cells become 53 px, the anchor is stretched with the map and then reduced to the shortest shift
+    assert.deepEqual([created.grid, created.width, created.height], [{ type: 1, size: 53 }, 4240, 2650]);
+    assert.deepEqual([created.shiftX, created.shiftY], [17, -24]);
+    assert.equal("background" in created, false);
+
+    env.game.release = { generation: 13 };
+    env.state.dialogWaitResult = decision;
+    await __test__.handleImportedImage(createImageFile("Found.png"));
+    const legacy = env.state.sceneCreates.at(-1);
+    assert.deepEqual(legacy.background, { offsetX: 17, offsetY: -24 });
+    assert.equal("shiftX" in legacy, false);
+
+    // A grid without an anchor, from the file name or typed in, does not shift
+    env.state.dialogWaitResult = { ...decision, grid: { type: 1, size: 100 } };
+    await __test__.handleImportedImage(createImageFile("Plain.png"));
+    const plain = env.state.sceneCreates.at(-1);
+    assert.equal("shiftX" in plain, false);
+    assert.equal("background" in plain, false);
+  } finally {
+    delete env.game.release;
+  }
+});
+
+test("the grid fields take what the search finds, keep what the user typed and tell when nothing is found", async () => {
+  env.state.localizations.set("SIPD.Grid.Found", "Found.");
+  env.state.localizations.set("SIPD.Grid.NotFound", "Nothing.");
+  env.state.localizations.set("SIPD.Grid.Searching", "Searching.");
+  const extraFields = (form) => {
+    for ( const name of ["gridExact", "gridAnchorX", "gridAnchorY", "gridLead"] ) form.elements[name] = Object.assign(new TestHTMLElement(), { value: "" });
+    form.isConnected = true;
+  };
+  try {
+    const found = { type: 2, size: 71, exact: 71.3, anchor: { x: 12.5, y: 40 } };
+    const { form, hint } = createGridForm({ type: "1", size: "100", columns: "42", source: "default" });
+    extraFields(form);
+    let resolve;
+    const search = new Promise((done) => { resolve = done; });
+    __test__.bindGridFields(form, { width: 4200, height: 2800, gridTools: { auto: true, search: () => search, find: () => search } });
+    assert.equal(form.elements.gridSource.value, "searching");
+    assert.match(hint.textContent, /Searching/);
+
+    resolve({ found: true, grid: found });
+    await search;
+    await Promise.resolve();
+    assert.equal(form.elements.gridSource.value, "found");
+    assert.equal(form.elements.gridType.value, "2");
+    assert.equal(form.elements.gridSize.value, "71");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 2, size: 71, exact: 71.3, anchor: { x: 12.5, y: 40 } });
+    assert.match(hint.textContent, /Found/);
+
+    // Typing a size drops the exact size but keeps the position, another kind of grid drops both
+    form.elements.gridSize.value = "75";
+    form.elements.gridSize.dispatch("input");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 2, size: 75, anchor: { x: 12.5, y: 40 } });
+    form.elements.gridType.value = "1";
+    form.elements.gridType.dispatch("change");
+    assert.deepEqual(__test__.readGridChoice(form), { type: 1, size: 75 });
+
+    // A search that finds nothing leaves the default and says so, a typed grid stays
+    const none = createGridForm({ source: "default" });
+    extraFields(none.form);
+    const answer = Promise.resolve({ found: false, reason: "noGrid" });
+    __test__.bindGridFields(none.form, { width: 4200, height: 2800, gridTools: { auto: true, search: () => answer, find: () => answer } });
+    await answer;
+    await Promise.resolve();
+    assert.equal(none.form.elements.gridSource.value, "none");
+    assert.equal(__test__.readGridChoice(none.form), null);
+    assert.match(none.hint.textContent, /Nothing/);
+
+    const typed = createGridForm({ source: "default" });
+    extraFields(typed.form);
+    let late;
+    const slow = new Promise((done) => { late = done; });
+    __test__.bindGridFields(typed.form, { width: 4200, height: 2800, gridTools: { auto: true, search: () => slow, find: () => slow } });
+    typed.form.elements.gridSize.value = "90";
+    typed.form.elements.gridSize.dispatch("input");
+    late({ found: true, grid: found });
+    await slow;
+    await Promise.resolve();
+    assert.equal(typed.form.elements.gridSource.value, "manual");
+    assert.equal(__test__.readGridChoice(typed.form).size, 90);
+
+    // Without the automatic search nothing runs by itself
+    const quiet = createGridForm({ source: "default" });
+    extraFields(quiet.form);
+    let called = false;
+    __test__.bindGridFields(quiet.form, { width: 4200, height: 2800, gridTools: { auto: false, search: () => { called = true; return new Promise(() => {}); } } });
+    assert.equal(called, false);
+    assert.equal(quiet.form.elements.gridSource.value, "default");
+  } finally {
+    for ( const key of ["SIPD.Grid.Found", "SIPD.Grid.NotFound", "SIPD.Grid.Searching"] ) env.state.localizations.delete(key);
+  }
+});
+
+test("a shortcut that creates a scene waits for the grid search and the search can be switched off", async () => {
+  const { ACTIONS } = __test__;
+  env.state.imageBehavior = { width: 3000, height: 2000, error: false };
+  env.state.uploadResponse = { path: "maps/quick.png" };
+  setSetting(__test__.LAST_ACTION_SETTING, ACTIONS.SCENE_BACKGROUND);
+  setSetting(__test__.REMEMBER_LAST_ACTION_SETTING, true);
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  // The stand-in canvas holds a flat gray picture, so the search finds no grid
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { fillRect() {}, drawImage() {}, getImageData: (_x, _y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4).fill(128) }) };
+    }
+  };
+  try {
+    await __test__.handleImportedImage(createImageFile("Plain.png"), { quickTarget: __test__.QUICK_TARGETS.DEFAULT });
+    const created = env.state.sceneCreates.at(-1);
+    assert.equal(created.name !== undefined, true);
+    assert.equal("grid" in created, false);
+    assert.equal("shiftX" in created, false);
+
+    setSetting(__test__.AUTO_GRID_SETTING, false);
+    const before = env.state.sceneCreates.length;
+    await __test__.handleImportedImage(createImageFile("Plain.png"), { quickTarget: __test__.QUICK_TARGETS.DEFAULT });
+    assert.equal(env.state.sceneCreates.length, before + 1);
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});
+
+test("the grid search is registered as a client setting", async () => {
+  await env.hooks.trigger("init");
+  const setting = env.state.registerCalls.find((entry) => entry.key === __test__.AUTO_GRID_SETTING);
+  assert.equal(setting.data.scope, "client");
+  assert.equal(setting.data.default, true);
+  assert.equal(setting.data.config, true);
 });

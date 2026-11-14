@@ -210,5 +210,19 @@
   "SIPD.Debug.Save": "Save debug file",
   "SIPD.Debug.Hint": "Saves one file for bug reports about all of Sephral’s modules in this world: versions, settings and what the modules recorded, such as the latest chat messages they read. It contains chat text and whispers, check it before you share it.",
   "SIPD.Debug.Entry": "Save Debug File (Sephral’s Modules)",
-  "SIPD.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it."
+  "SIPD.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it.",
+  "SIPD.Settings.AutoGrid.Label": "Look for the grid on maps",
+  "SIPD.Settings.AutoGrid.Hint": "When an image becomes a new scene, look for the grid printed on the map and fit Foundry's grid to it, square or hexagons. Nothing changes when no clear grid is found. A grid in the file name always wins.",
+  "SIPD.Dialog.GridHexagons": "{columns} x {rows} hexagons.",
+  "SIPD.Grid.Find": "Find grid",
+  "SIPD.Grid.Measure": "Measure",
+  "SIPD.Grid.MeasureHint": "Drag on the preview across a few cells, from one grid corner to another (hexagons: from center to center).",
+  "SIPD.Grid.MeasureCount": "cells along the line",
+  "SIPD.Grid.MeasureApply": "Use",
+  "SIPD.Grid.Searching": "Looking for a printed grid...",
+  "SIPD.Grid.Found": "Found on the map. Check it on the preview.",
+  "SIPD.Grid.Measured": "Set from your measurement. Check it on the preview.",
+  "SIPD.Grid.NotFound": "No printed grid found on this map. Enter the size of a cell, or use Measure and drag across a few cells.",
+  "SIPD.Grid.Unreadable": "The picture could not be read for the grid search. Enter the size of a cell by hand.",
+  "SIPD.SelfTest.GridFit": "Foundry places its grid differently than the grid fit expects, or this browser cannot read the pixels of a picture. A found grid may sit a little off."
 }

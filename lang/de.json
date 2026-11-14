@@ -210,5 +210,19 @@
   "SIPD.Debug.Save": "Debug-Datei speichern",
   "SIPD.Debug.Hint": "Speichert eine Datei für Fehlerberichte über alle Module von Sephral in dieser Welt: Versionen, Einstellungen und was die Module aufgezeichnet haben, etwa die letzten Chatnachrichten, die sie gelesen haben. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
   "SIPD.Debug.Entry": "Debug-Datei speichern (Sephral’s Module)",
-  "SIPD.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen."
+  "SIPD.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
+  "SIPD.Settings.AutoGrid.Label": "Raster auf Karten suchen",
+  "SIPD.Settings.AutoGrid.Hint": "Wird aus einem Bild eine neue Szene, sucht das Modul das aufgedruckte Raster der Karte und legt Foundrys Raster darauf, quadratisch oder aus Sechsecken. Findet es kein klares Raster, bleibt alles wie es ist. Ein Raster im Dateinamen gilt immer zuerst.",
+  "SIPD.Dialog.GridHexagons": "{columns} x {rows} Sechsecke.",
+  "SIPD.Grid.Find": "Raster suchen",
+  "SIPD.Grid.Measure": "Ausmessen",
+  "SIPD.Grid.MeasureHint": "Zieh in der Vorschau über ein paar Felder, von einer Rasterecke zur nächsten (bei Sechsecken von Mitte zu Mitte).",
+  "SIPD.Grid.MeasureCount": "Felder entlang der Linie",
+  "SIPD.Grid.MeasureApply": "Übernehmen",
+  "SIPD.Grid.Searching": "Suche ein aufgedrucktes Raster...",
+  "SIPD.Grid.Found": "Auf der Karte gefunden. Prüf es in der Vorschau.",
+  "SIPD.Grid.Measured": "Aus deiner Messung übernommen. Prüf es in der Vorschau.",
+  "SIPD.Grid.NotFound": "Auf dieser Karte ist kein aufgedrucktes Raster zu erkennen. Trag die Größe eines Feldes ein oder miss sie mit Ausmessen: einfach über ein paar Felder ziehen.",
+  "SIPD.Grid.Unreadable": "Das Bild ließ sich für die Rastersuche nicht lesen. Trag die Größe eines Feldes von Hand ein.",
+  "SIPD.SelfTest.GridFit": "Foundry legt sein Raster anders an, als die Rasteranpassung erwartet, oder dieser Browser kann die Pixel eines Bildes nicht lesen. Ein gefundenes Raster kann ein Stück verschoben sitzen."
 }
