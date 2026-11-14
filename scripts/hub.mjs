@@ -12,7 +12,7 @@
  */
 
 export const HUB_LIB_VERSION = 3;
-export const CATALOG_REVISION = 2026111203;
+export const CATALOG_REVISION = 2026111401;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -69,8 +69,8 @@ const CATALOG = [
     text: { en: "Zoom, pan and a reading lens for every picture you show your players.",
       de: "Zoomen, verschieben und eine Leselupe für jedes Bild, das du deinen Spielern zeigst." } },
   { id: "sephrals-deep-tables", title: "Deep Tables", listed: false,
-    text: { en: "Roll tables with a look first, tables inside tables and results that go straight to your players.",
-      de: "Würfeltabellen mit Vorschau, Tabellen in Tabellen und Ergebnisse, die direkt bei deinen Spielern landen." } },
+    text: { en: "Roll tables with a look first, ready tables in the box, rows that fit the moment and results that act.",
+      de: "Würfeltabellen mit Vorschau, fertigen Tabellen zum Start, Zeilen passend zur Lage und Ergebnissen, die handeln." } },
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
     text: { en: "A file manager with two panels for Foundry's storage.",
       de: "Ein Dateimanager mit zwei Fenstern für Foundrys Speicher." } },
@@ -84,8 +84,8 @@ const CATALOG = [
     text: { en: "Ember's moons and inner realms with their phases at a glance.",
       de: "Embers Monde und innere Reiche mit ihren Phasen auf einen Blick." } },
   { id: "sephrals-map-pins", title: "Map Pins", listed: false,
-    text: { en: "Map pins with labels you can always read, numbers, categories and a preview.",
-      de: "Kartenpins mit Beschriftung, die man immer lesen kann, Nummern, Kategorien und Vorschau." } },
+    text: { en: "Readable map pins, places your players discover, areas, routes and where the party is right now.",
+      de: "Lesbare Kartenpins, Orte, die deine Spieler entdecken, Gebiete, Routen und wo die Gruppe gerade ist." } },
   { id: "sephrals-map-knowledge", title: "Map Knowledge", listed: true, core: 14,
     text: { en: "Reveal parts of the map to your players, right in Foundry's own fog of war.",
       de: "Deck Teile der Karte für deine Spieler auf, direkt in Foundrys eigenem Nebel des Krieges." } },
@@ -123,11 +123,11 @@ const CATALOG = [
     text: { en: "Health, armor and conditions when you hover over a token.",
       de: "Leben, Rüstung und Zustände, sobald du über ein Token fährst." } },
   { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false,
-    text: { en: "Outfits for every character: portrait and token change together with one click.",
-      de: "Outfits für jede Figur: Porträt und Token wechseln mit einem Klick zusammen." } },
+    text: { en: "Outfits for every character, a conversation stage with backdrops and crowds where nobody looks the same.",
+      de: "Outfits für jede Figur, eine Gesprächsbühne mit Kulissen und Gruppen, in denen keiner gleich aussieht." } },
   { id: "sephrals-update-guard", title: "Update Guard", listed: false,
-    text: { en: "Updates without surprises: test your world, find the module behind a problem and get back.",
-      de: "Updates ohne Überraschungen: Welt testen, das Modul hinter einem Problem finden und zurückkehren." } },
+    text: { en: "Is your world ready for tonight? Errors of your players, modules in each other's way and the way back.",
+      de: "Ist deine Welt bereit für heute Abend? Fehler deiner Spieler, Module, die sich in die Quere kommen, und der Weg zurück." } },
   { id: "sephrals-vista-portrait-switcher", title: "Vista Portrait Switcher", listed: true, needs: "ember",
     text: { en: "Switch the portraits NPCs show in Ember's Vista scenes.",
       de: "Wechsle die Porträts, die NSC in Embers Vista-Szenen zeigen." } }
