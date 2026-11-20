@@ -3110,7 +3110,7 @@ test("background removal and frame belong to token and portrait pictures only", 
   const token = __test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, removeBackground: true, backgroundTolerance: 40, frame });
   assert.equal(token.removeBackground, true);
   assert.equal(token.backgroundTolerance, 40);
-  assert.deepEqual(token.frame, { style: "round", source: "custom", custom: "#ff0000", thickness: 9 });
+  assert.deepEqual(token.frame, { style: "flat", source: "custom", custom: "#ff0000", thickness: 9 });
   const portrait = __test__.normalizeActionDecision({ action: ACTIONS.ACTOR_PORTRAIT, removeBackground: true, frame });
   assert.equal(portrait.removeBackground, true);
   assert.equal(portrait.frame.style, "none");
@@ -3121,7 +3121,9 @@ test("background removal and frame belong to token and portrait pictures only", 
   assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, backgroundTolerance: "x" }).backgroundTolerance, 24);
   assert.equal(__test__.pixelToolsMarkup(null, {}), "");
   const markup = __test__.pixelToolsMarkup({ detected: {} }, { frameStyle: "square" });
-  assert.ok(markup.includes("name=\"removeBackground\"") && markup.includes("<option value=\"square\" selected>"));
+  assert.ok(markup.includes("name=\"removeBackground\"") && markup.includes("data-frame-style=\"flatSquare\"") && markup.includes("aria-checked=\"true\""));
+  assert.ok(markup.includes("name=\"frameStyle\" value=\"flatSquare\""));
+  assert.equal((markup.match(/data-frame-style=/g) ?? []).length, 15);
   assert.equal(__test__.resolveDecisionFrame({ frame: { style: "none" } }), null);
-  assert.deepEqual(__test__.resolveDecisionFrame({ frame }), { style: "round", thickness: 9, color: "#ff0000" });
+  assert.deepEqual(__test__.resolveDecisionFrame({ frame }), { style: "flat", thickness: 9, color: "#ff0000" });
 });

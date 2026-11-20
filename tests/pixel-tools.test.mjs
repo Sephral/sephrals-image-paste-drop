@@ -129,7 +129,9 @@ test("removeBackgroundAsync gives the same result and hands control back", async
 test("frame thickness and normalizers", () => {
   assert.equal(px.frameThicknessPixels(200, 300, 5), 10);
   assert.equal(px.frameThicknessPixels(10, 10, 2), 1);
-  assert.equal(px.normalizeFrameStyle("round"), "round");
+  assert.equal(px.normalizeFrameStyle("round"), "flat");
+  assert.equal(px.normalizeFrameStyle("square"), "flatSquare");
+  assert.equal(px.normalizeFrameStyle("gold"), "gold");
   assert.equal(px.normalizeFrameStyle("hexagon"), "none");
   assert.equal(px.normalizeFrameThickness(99), px.FRAME_THICKNESS_MAX);
   assert.equal(px.normalizeFrameThickness("x"), px.FRAME_THICKNESS_DEFAULT);
@@ -149,7 +151,7 @@ test("resolveFrameColor picks owner, disposition or custom colour", () => {
 test("a round frame draws a ring and cuts the corners", () => {
   const size = 100;
   const data = makePicture(size, size, {background: [10, 10, 10], figure: [10, 10, 10]});
-  assert.equal(px.applyFrame(data, size, size, {style: "round", thickness: 10, color: "#ff0000"}), true);
+  assert.equal(px.applyFrame(data, size, size, {style: "flat", thickness: 10, color: "#ff0000"}), true);
   assert.equal(alphaAt(data, size, 0, 0), 0);
   assert.deepEqual(pixelAt(data, size, 50, 2), [255, 0, 0, 255]);
   assert.deepEqual(pixelAt(data, size, 2, 50), [255, 0, 0, 255]);
@@ -160,7 +162,7 @@ test("a round frame draws a ring and cuts the corners", () => {
 test("a square frame draws the ring on the outer pixels only", () => {
   const size = 60;
   const data = makePicture(size, size, {background: [0, 0, 200], figure: [0, 0, 200]});
-  px.applyFrame(data, size, size, {style: "square", thickness: 10, color: "#00ff00"});
+  px.applyFrame(data, size, size, {style: "flatSquare", thickness: 10, color: "#00ff00"});
   assert.deepEqual(pixelAt(data, size, 0, 0), [0, 255, 0, 255]);
   assert.deepEqual(pixelAt(data, size, 30, 1), [0, 255, 0, 255]);
   assert.deepEqual(pixelAt(data, size, 30, 30), [0, 0, 200, 255]);
@@ -170,7 +172,7 @@ test("a square frame draws the ring on the outer pixels only", () => {
 test("a frame over a transparent picture keeps the inside see-through", () => {
   const size = 50;
   const data = new Uint8ClampedArray(size * size * 4);
-  px.applyFrame(data, size, size, {style: "round", thickness: 8, color: "#ffffff"});
+  px.applyFrame(data, size, size, {style: "flat", thickness: 8, color: "#ffffff"});
   assert.equal(alphaAt(data, size, 25, 25), 0);
   assert.equal(alphaAt(data, size, 25, 1), 255);
 });
@@ -180,4 +182,113 @@ test("frame style none changes nothing", () => {
   const before = Array.from(data);
   assert.equal(px.applyFrame(data, 20, 20, {style: "none"}), false);
   assert.deepEqual(Array.from(data), before);
+});
+
+const STYLED = px.FRAME_STYLE_LIST.filter(style => style !== "none");
+
+test("the frame style list starts with none and keeps every name once", () => {
+  assert.equal(px.FRAME_STYLE_LIST[0], "none");
+  assert.equal(new Set(px.FRAME_STYLE_LIST).size, px.FRAME_STYLE_LIST.length);
+  assert.equal(STYLED.length, 14);
+  for ( const style of px.FRAME_STYLE_LIST ) assert.equal(px.normalizeFrameStyle(style), style);
+});
+
+test("every frame style draws a ring, is repeatable and tints with the chosen color", () => {
+  const size = 120;
+  const fresh = () => makePicture(size, size, {background: [90, 90, 90], figure: [90, 90, 90]});
+  for ( const style of STYLED ) {
+    const first = fresh();
+    const second = fresh();
+    assert.equal(px.applyFrame(first, size, size, {style, thickness: 10, color: "#3050e0"}), true, style);
+    px.applyFrame(second, size, size, {style, thickness: 10, color: "#3050e0"});
+    assert.deepEqual(Array.from(first), Array.from(second), `${style} is deterministic`);
+    // the middle of the picture is still the picture
+    assert.deepEqual(pixelAt(first, size, 60, 60), [90, 90, 90, 255], `${style} keeps the middle`);
+    // something was drawn on the ring
+    const ring = new Set();
+    for ( let x = 0; x < size; x += 1 ) ring.add(pixelAt(first, size, x, 3).join());
+    assert.ok(ring.size > 1 || style.startsWith("flat"), `${style} has a ring`);
+    // another color changes the picture
+    const other = fresh();
+    px.applyFrame(other, size, size, {style, thickness: 10, color: "#e0a030"});
+    assert.notDeepEqual(Array.from(first), Array.from(other), `${style} takes the color`);
+  }
+});
+
+test("round styles cut the corners, square styles keep them", () => {
+  const size = 100;
+  for ( const style of STYLED ) {
+    const data = makePicture(size, size, {background: [40, 40, 40], figure: [40, 40, 40]});
+    px.applyFrame(data, size, size, {style, thickness: 10, color: "#ffffff"});
+    const square = px.frameShape(style) === "square";
+    assert.equal(alphaAt(data, size, 0, 0) === 255, square, style);
+  }
+  assert.equal(px.frameShape("flatSquare"), "square");
+  assert.equal(px.frameShape("ornateSquare"), "square");
+  assert.equal(px.frameShape("gold"), "round");
+});
+
+test("a laurel wreath leaves the gaps between the leaves see-through", () => {
+  const size = 200;
+  const data = makePicture(size, size, {background: [40, 40, 40], figure: [40, 40, 40]});
+  px.applyFrame(data, size, size, {style: "laurel", thickness: 10, color: "#40a040"});
+  let gaps = 0;
+  let leaves = 0;
+  for ( let angle = 0; angle < 360; angle += 1 ) {
+    const x = Math.round(100 + (Math.cos(angle * Math.PI / 180) * 92));
+    const y = Math.round(100 + (Math.sin(angle * Math.PI / 180) * 92));
+    if ( alphaAt(data, size, x, y) < 128 ) gaps += 1;
+    else leaves += 1;
+  }
+  assert.ok(gaps > 20 && leaves > 20, `${gaps} gaps, ${leaves} leaf pixels`);
+  assert.equal(alphaAt(data, size, 100, 100), 255);
+});
+
+test("metal rings are lit from the upper left", () => {
+  const size = 200;
+  const data = makePicture(size, size, {background: [40, 40, 40], figure: [40, 40, 40]});
+  px.applyFrame(data, size, size, {style: "gold", thickness: 10, color: "#ffffff"});
+  const lightness = (x, y) => pixelAt(data, size, x, y).slice(0, 3).reduce((a, b) => a + b, 0);
+  // the outer bevel: the upper left half catches the light, the lower right half does not
+  let upper = 0;
+  let lower = 0;
+  for ( let angle = 0; angle < 360; angle += 2 ) {
+    const x = Math.round(100 + (Math.cos(angle * Math.PI / 180) * 98.8));
+    const y = Math.round(100 + (Math.sin(angle * Math.PI / 180) * 98.8));
+    if ( (x + y) < 200 ) upper += lightness(x, y);
+    else lower += lightness(x, y);
+  }
+  assert.ok(upper > lower, `${upper} against ${lower}`);
+});
+
+test("the ring shades the picture next to its inner edge", () => {
+  const size = 200;
+  const data = makePicture(size, size, {background: [200, 200, 200], figure: [200, 200, 200]});
+  px.applyFrame(data, size, size, {style: "gold", thickness: 10, color: "#ffffff"});
+  assert.ok(pixelAt(data, size, 100, 22)[0] < 200);
+  assert.equal(pixelAt(data, size, 100, 100)[0], 200);
+});
+
+test("frame geometry, repeats and helpers", async () => {
+  const frames = await import("../scripts/frames.js");
+  const top = frames.frameGeometry("round", 49, 0, 100, 100, 10);
+  assert.ok(Math.abs(top.edge - 0.5) < 0.01);
+  assert.ok(top.ny < -0.99 && Math.abs(top.nx) < 0.05);
+  const left = frames.frameGeometry("square", 0, 50, 100, 100, 10);
+  assert.equal(left.nx, -1);
+  assert.equal(left.edge, 0.5);
+  const corner = frames.frameGeometry("square", 0, 0, 100, 60, 10);
+  assert.equal(corner.edge, 0.5);
+  assert.equal(corner.perimeter, 320);
+  assert.equal(frames.frameGeometry("round", 3, 3, 100, 100, 10).edge < 0, true);
+  const cell = frames.repeatCell(105, 400, 8);
+  assert.equal(cell.cell, 2);
+  assert.ok(Math.abs(cell.offset + 20) < 1e-9);
+  assert.equal(frames.repeatCell(-10, 400, 8).cell, 7);
+  assert.equal(frames.distanceToSegment(5, 5, 0, 0, 10, 0), 5);
+  assert.equal(frames.distanceToSegment(-3, 4, 0, 0, 10, 0), 5);
+  assert.equal(frames.hash2(3, 9), frames.hash2(3, 9));
+  const values = Array.from({length: 200}, (_unused, i) => frames.hash2(i, i * 7));
+  assert.ok(values.every(v => v >= 0 && v < 1) && new Set(values).size > 150);
+  assert.equal(frames.valueNoise(2, 3), frames.hash2(2, 3));
 });

@@ -3,6 +3,7 @@
 // functions at the end connect them to the import.
 
 import {isAnimatedFile} from "./image-optimize.js";
+import {FRAME_STYLES, FRAME_STYLE_LIST, drawFrame, frameShape, normalizeFrameStyle} from "./frames.js";
 
 const BACKGROUND_TOLERANCE_DEFAULT = 24;
 const BACKGROUND_TOLERANCE_MIN = 1;
@@ -17,7 +18,6 @@ const MIN_BORDER_COVERAGE = 0.6;
 const TRANSPARENT_BORDER_SHARE = 0.2;
 const FILL_CHUNK = 250000;
 
-const FRAME_STYLES = Object.freeze({NONE: "none", ROUND: "round", SQUARE: "square"});
 const FRAME_COLOR_SOURCES = Object.freeze({OWNER: "owner", DISPOSITION: "disposition", CUSTOM: "custom"});
 const FRAME_THICKNESS_DEFAULT = 5;
 const FRAME_THICKNESS_MIN = 2;
@@ -34,10 +34,6 @@ function clampNumber(value, min, max, fallback) {
 
 function normalizeTolerance(value) {
   return Math.round(clampNumber(value, BACKGROUND_TOLERANCE_MIN, BACKGROUND_TOLERANCE_MAX, BACKGROUND_TOLERANCE_DEFAULT));
-}
-
-function normalizeFrameStyle(value) {
-  return Object.values(FRAME_STYLES).includes(value) ? value : FRAME_STYLES.NONE;
 }
 
 function normalizeFrameSource(value) {
@@ -277,46 +273,12 @@ function frameThicknessPixels(width, height, percent) {
   return Math.max(1, Math.round(side * normalizeFrameThickness(percent) / 100));
 }
 
-// How much of a pixel is ring: 0 to 1, with a soft one pixel edge. Round frames also cut the corners away (outside = -1
-// means the pixel is outside the shape).
-function frameCoverage(style, x, y, width, height, thickness) {
-  const px = x + 0.5;
-  const py = y + 0.5;
-  if ( style === FRAME_STYLES.ROUND ) {
-    const radius = Math.min(width, height) / 2;
-    const distance = Math.hypot(px - (width / 2), py - (height / 2));
-    const shape = Math.min(1, Math.max(0, radius - distance + 0.5));
-    const ring = Math.min(1, Math.max(0, distance - (radius - thickness) + 0.5));
-    return {ring: ring * shape, shape};
-  }
-  const edge = Math.min(px, width - px, py, height - py);
-  return {ring: Math.min(1, Math.max(0, thickness - edge + 0.5)), shape: 1};
-}
-
-// Paints the ring into the picture in place. Round frames also make everything outside the circle transparent.
+// Paints the ring into the picture in place. Round frames also make everything outside the circle transparent. The
+// styles are drawn in frames.js, the color is the accent of the style.
 function applyFrame(data, width, height, {style=FRAME_STYLES.NONE, thickness=FRAME_THICKNESS_DEFAULT, color=FALLBACK_FRAME_COLOR}={}) {
   const frameStyle = normalizeFrameStyle(style);
   if ( frameStyle === FRAME_STYLES.NONE ) return false;
-  const pixels = frameThicknessPixels(width, height, thickness);
-  const [fr, fg, fb] = hexToRgb(color);
-  for ( let y = 0; y < height; y += 1 ) {
-    for ( let x = 0; x < width; x += 1 ) {
-      const {ring, shape} = frameCoverage(frameStyle, x, y, width, height, pixels);
-      const offset = ((y * width) + x) * 4;
-      const imageAlpha = (data[offset + 3] / 255) * shape;
-      const alpha = ring + (imageAlpha * (1 - ring));
-      if ( alpha <= 0 ) {
-        data[offset + 3] = 0;
-        continue;
-      }
-      const weight = imageAlpha * (1 - ring);
-      data[offset] = Math.round(((fr * ring) + (data[offset] * weight)) / alpha);
-      data[offset + 1] = Math.round(((fg * ring) + (data[offset + 1] * weight)) / alpha);
-      data[offset + 2] = Math.round(((fb * ring) + (data[offset + 2] * weight)) / alpha);
-      data[offset + 3] = Math.round(alpha * 255);
-    }
-  }
-  return true;
+  return drawFrame(data, width, height, frameStyle, frameThicknessPixels(width, height, thickness), hexToRgb(color));
 }
 
 // ------------------------------------------------------------------------------------------------ files and canvas
@@ -406,6 +368,24 @@ function cropSquare(source) {
   return copy;
 }
 
+// A copy of a canvas with a frame drawn into it, scaled to fit `size` pixels on the long side when given.
+// Works on any canvas, so the dialog draws a thumbnail of every style from one picture.
+function framedCanvas(source, frame, size=0) {
+  const scale = size > 0 ? Math.min(1, size / Math.max(source.width, source.height)) : 1;
+  const width = Math.max(1, Math.round(source.width * scale));
+  const height = Math.max(1, Math.round(source.height * scale));
+  const canvas = makeCanvas(width, height);
+  const context = canvas.getContext("2d", {willReadFrequently: true});
+  context.imageSmoothingQuality = "high";
+  context.drawImage(source, 0, 0, width, height);
+  if ( normalizeFrameStyle(frame?.style) !== FRAME_STYLES.NONE ) {
+    const image = context.getImageData(0, 0, width, height);
+    applyFrame(image.data, width, height, frame);
+    context.putImageData(image, 0, 0);
+  }
+  return canvas;
+}
+
 // The live preview of the dialog: a small copy of the picture, analysed once, redrawn as the sliders move
 async function createPixelPreview(file) {
   if ( !file || !PIXEL_TYPES.includes(file.type) || (typeof globalThis.createImageBitmap !== "function") ) return null;
@@ -428,7 +408,8 @@ async function createPixelPreview(file) {
       const canvas = makeCanvas(copy.width, copy.height);
       canvas.getContext("2d").putImageData(copy, 0, 0);
       return canvas;
-    }
+    },
+    framedCanvas
   };
 }
 
@@ -455,8 +436,10 @@ export {
   removeBackground,
   removeBackgroundAsync,
   frameThicknessPixels,
-  frameCoverage,
+  FRAME_STYLE_LIST,
+  frameShape,
   applyFrame,
+  framedCanvas,
   processPictureFile,
   createPixelPreview
 };

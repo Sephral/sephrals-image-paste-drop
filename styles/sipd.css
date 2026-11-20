@@ -999,12 +999,24 @@
 /* Background removal and token frame */
 .sipd-pixel-tools {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.3rem;
 }
 
 .sipd-pixel-tools[hidden],
-.sipd-pixel-tools [hidden] {
+.sipd-pixel-tools [hidden],
+.sipd-result[hidden] {
   display: none !important;
+}
+
+.sipd-background-line {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.sipd-background-line > .sipd-choice-row {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sipd-pixel-fields {
@@ -1020,10 +1032,134 @@
   min-width: 0;
 }
 
+/* The tolerance sits next to the checkbox that switches it on */
+.sipd-pixel-fields--tolerance {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--sipd-line);
+  border-radius: var(--sipd-radius-md);
+  font-size: 0.75rem;
+}
+
+.sipd-pixel-fields--tolerance label {
+  margin: 0;
+}
+
+.sipd-pixel-fields--tolerance input[type="range"] {
+  width: 6.5rem;
+}
+
+.sipd-pixel-fields output {
+  min-width: 1.4rem;
+  text-align: end;
+  font-size: 0.75rem;
+}
+
+/* Frame picker: one tile per style, each a live thumbnail of the picture in that frame */
+.sipd-frame-block {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem 0.5rem;
+  border: 1px solid var(--sipd-line);
+  border-radius: var(--sipd-radius-md);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.sipd-app[data-ui-theme="foundry"] .sipd-frame-block {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sipd-frame-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.sipd-frame-head span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--sipd-accent);
+}
+
+.sipd-frame-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 3.4rem);
+  gap: 0.25rem;
+}
+
+.sipd-frame-tile {
+  display: block;
+  width: 3.4rem;
+  height: 3.4rem;
+  margin: 0;
+  padding: 2px;
+  line-height: 0;
+  cursor: pointer;
+  border: 1px solid var(--sipd-line);
+  border-radius: var(--sipd-radius-sm);
+  background-color: #ffffff;
+  background-image: conic-gradient(#d4d4d4 25%, transparent 25% 50%, #d4d4d4 50% 75%, transparent 75%);
+  background-size: 10px 10px;
+}
+
+.sipd-frame-tile:hover {
+  border-color: var(--sipd-accent);
+}
+
+.sipd-frame-tile[aria-checked="true"] {
+  border-color: var(--sipd-accent);
+  box-shadow: 0 0 0 2px var(--sipd-accent);
+}
+
+.sipd-frame-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sipd-pixel-fields--frame {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+.sipd-pixel-fields--frame label {
+  margin: 0;
+}
+
+.sipd-pixel-fields--frame select {
+  flex: 0 1 9rem;
+}
+
+.sipd-pixel-fields--frame input[type="range"] {
+  flex: 1 1 5rem;
+}
+
 .sipd-pixel-fields--frame input[type="color"] {
+  flex: 0 0 auto;
   width: 2.2rem;
   height: 1.6rem;
   padding: 0;
+}
+
+/* The result below the original picture */
+.sipd-result {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.sipd-result-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sipd-muted);
 }
 
 .sipd-pixel-preview {
@@ -1032,13 +1168,125 @@
 }
 
 .sipd-pixel-canvas {
-  width: 9rem;
+  width: 9.5rem;
   height: auto;
-  max-height: 9rem;
+  max-height: 9.5rem;
   object-fit: contain;
   border: 1px solid var(--sipd-line);
   border-radius: var(--sipd-radius-md);
   background-color: #ffffff;
   background-image: conic-gradient(#c9c9c9 25%, transparent 25% 50%, #c9c9c9 50% 75%, transparent 75%);
   background-size: 14px 14px;
+}
+
+/* Compact import window: the options sit close together, the preview and the result share the left column, the
+   hints are tooltips or one line. The height only grows with what the chosen target shows. */
+.sipd-import-dialog .sipd-shell {
+  gap: 0.45rem;
+}
+
+.sipd-import-dialog .sipd-hero {
+  padding: 0.4rem 0.8rem;
+}
+
+.sipd-import-dialog .sipd-heading {
+  margin: 0;
+}
+
+.sipd-import-dialog .sipd-summary,
+.sipd-import-dialog .sipd-panel--preview .sipd-panel-hint,
+.sipd-import-dialog .sipd-panel--form > .sipd-panel-header {
+  display: none;
+}
+
+.sipd-import-dialog .sipd-dialog {
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.sipd-import-dialog .sipd-panel {
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.sipd-import-dialog .sipd-panel--preview .sipd-dialog__preview {
+  min-height: 0;
+}
+
+.sipd-import-dialog .sipd-dialog__preview img,
+.sipd-import-dialog .sipd-dialog__preview video {
+  min-height: 0;
+  max-height: 13rem;
+}
+
+.sipd-import-dialog .sipd-dialog__fields {
+  gap: 0.45rem;
+}
+
+.sipd-import-dialog .sipd-panel--form .form-group > label {
+  margin-top: 0.4rem;
+}
+
+.sipd-import-dialog .sipd-choice-stack {
+  gap: 0.3rem;
+}
+
+.sipd-import-dialog .sipd-choice-row {
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.sipd-import-dialog .sipd-choice-row:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.sipd-import-dialog .sipd-choice-row > span {
+  min-width: 0;
+}
+
+.sipd-import-dialog .sipd-choice-row small {
+  margin-top: 0;
+  overflow: hidden;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sipd-import-dialog .sipd-choice-row small[hidden] {
+  display: none;
+}
+
+.sipd-import-dialog .sipd-choice-row input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Target and what it changes in one block, the labels above the fields */
+.sipd-target-block {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sipd-target-block > .form-group {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.sipd-target-block > .sipd-target-action {
+  flex-grow: 1.4;
+}
+
+.sipd-panel--form .sipd-target-block .form-group {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+}
+
+.sipd-panel--form .sipd-target-block .form-group > label {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.sipd-import-dialog {
+  max-height: calc(100vh - 16px);
 }

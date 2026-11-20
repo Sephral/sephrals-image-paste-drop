@@ -4,6 +4,7 @@ import {
   BACKGROUND_TOLERANCE_MIN,
   FRAME_COLOR_SOURCES,
   FRAME_STYLES,
+  FRAME_STYLE_LIST,
   FRAME_THICKNESS_DEFAULT,
   FRAME_THICKNESS_MAX,
   FRAME_THICKNESS_MIN,
@@ -91,6 +92,9 @@ const ASK_TOKEN_SCOPE_SETTING = "askTokenScope";
 const LAST_TOKEN_SCOPE_SETTING = "lastTokenScope";
 const SQUARE_TOKEN_CROP_SETTING = "squareTokenCrop";
 const TOKEN_FRAME_SETTING = "tokenFrame";
+// The thumbnails of the frame picker: drawn at twice their size, the ring at least this thick in percent
+const FRAME_THUMB_SIZE = 104;
+const FRAME_THUMB_THICKNESS = 8;
 const DEFAULT_ACTION_SETTING = "defaultAction";
 const REMEMBER_LAST_ACTION_SETTING = "rememberLastAction";
 const LAST_ACTION_SETTING = "lastAction";
@@ -463,11 +467,7 @@ Hooks.once("init", () => {
     name: localize("SIPD.Settings.TokenFrame.Label"),
     hint: localize("SIPD.Settings.TokenFrame.Hint"),
     type: String,
-    choices: {
-      [FRAME_STYLES.NONE]: localize("SIPD.Dialog.FrameNone"),
-      [FRAME_STYLES.ROUND]: localize("SIPD.Dialog.FrameRound"),
-      [FRAME_STYLES.SQUARE]: localize("SIPD.Dialog.FrameSquare")
-    },
+    choices: Object.fromEntries(FRAME_STYLE_LIST.map(style => [style, frameStyleLabel(style)])),
     default: FRAME_STYLES.NONE
   });
 
@@ -752,6 +752,7 @@ Hooks.once("ready", () => {
     // One file for all of Sephral's modules, without a message id about their latest picture
     saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
   };
+  migrateTokenFrameSetting();
   void ensurePlayerStorageDirectories();
   document.addEventListener("paste", onPaste, true);
   document.addEventListener("dragover", onDragOver, true);
@@ -1256,6 +1257,17 @@ function getSquareTokenCropDefault() {
   }
 }
 
+// The first version saved "round" and "square", which are the flat styles now
+function migrateTokenFrameSetting() {
+  try {
+    const stored = game.settings.get(MODULE_ID, TOKEN_FRAME_SETTING);
+    const style = normalizeFrameStyle(stored);
+    if ( style !== stored ) void game.settings.set(MODULE_ID, TOKEN_FRAME_SETTING, style);
+  } catch (_error) {
+    // the default applies
+  }
+}
+
 function getTokenFrameDefault() {
   try {
     return normalizeFrameStyle(game.settings.get(MODULE_ID, TOKEN_FRAME_SETTING));
@@ -1270,6 +1282,11 @@ function getOwnerColor(actor) {
   const owners = actor ? users.filter(user => !user.isGM && actor.testUserPermission?.(user, "OWNER")) : [];
   const user = owners.find(entry => entry.active) ?? owners[0] ?? game.user;
   return normalizeHexColor(user?.color?.css ?? String(user?.color ?? ""));
+}
+
+// The name of a frame style in the picker, the setting and the tooltips
+function frameStyleLabel(style) {
+  return localize(style === FRAME_STYLES.NONE ? "SIPD.Dialog.FrameNone" : `SIPD.FrameStyle.${style}`);
 }
 
 // What the frame colours depend on: the token or actor the picture is for
@@ -1295,7 +1312,7 @@ function resolveDecisionFrame(decision, context=null) {
   if ( !frame || (normalizeFrameStyle(frame.style) === FRAME_STYLES.NONE) ) return null;
   const info = getFrameContextInfo(context);
   return {
-    style: frame.style,
+    style: normalizeFrameStyle(frame.style),
     thickness: frame.thickness,
     color: resolveFrameColor({source: frame.source, custom: frame.custom, ownerColor: info.ownerColor, disposition: info.disposition})
   };
@@ -2019,6 +2036,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           <div class="sipd-dialog__preview">
             ${previewMarkup}
           </div>
+          ${pixelPreviewMarkup(pixelTools)}
         </section>
 
         <section class="sipd-panel sipd-panel--form">
@@ -2036,14 +2054,17 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 <input type="text" name="name" value="${escapeHtml(defaultName)}" autofocus>
               </div>
             </div>
-            <div class="form-group">
-              <label>${localize("SIPD.Dialog.Action")}</label>
-              <div class="form-fields">
-                <select name="action">
-                  ${actionOptionsMarkup(defaults.action, {remoteUrl, video, context})}
-                </select>
-                <span data-option-row="shareHint">${partnerHint(MODULE_ID, "sephrals-handout-lens")}</span>
+            <div class="sipd-target-block">
+              <div class="form-group sipd-target-action">
+                <label>${localize("SIPD.Dialog.Action")}</label>
+                <div class="form-fields">
+                  <select name="action">
+                    ${actionOptionsMarkup(defaults.action, {remoteUrl, video, context})}
+                  </select>
+                  <span data-option-row="shareHint">${partnerHint(MODULE_ID, "sephrals-handout-lens")}</span>
+                </div>
               </div>
+              ${tokenScopeMarkup(defaults.tokenScope)}
             </div>
             ${gridFieldsMarkup({width, height, grid, tools: Boolean(gridTools?.enabled)})}
             <div class="form-group sipd-upload-directory-row" data-option-row="uploadDirectory">
@@ -2065,7 +2086,6 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 </select>
               </div>
             </div>
-            ${tokenScopeMarkup(defaults.tokenScope)}
             ${recipientsMarkup(getShareRecipientChoices())}
             <div class="form-group stacked sipd-choice-stack">
               ${squareCropMarkup({width, height, video, checked: defaults.squareCrop})}
@@ -2158,11 +2178,10 @@ function tokenScopeMarkup(selected=TOKEN_SCOPES.TOKEN) {
     [TOKEN_SCOPES.PORTRAIT, "SIPD.Dialog.TokenScopePortrait"]
   ].map(([value, key]) => `<option value="${value}"${value === selected ? " selected" : ""}>${escapeHtml(localize(key))}</option>`).join("");
   return `
-            <div class="form-group" data-option-row="prototypeToken">
+            <div class="form-group sipd-target-scope" data-option-row="prototypeToken" title="${escapeHtml(localize("SIPD.Dialog.TokenScopeHint"))}">
               <label>${localize("SIPD.Dialog.TokenScope")}</label>
-              <div class="form-fields sipd-field-stack">
+              <div class="form-fields">
                 <select name="tokenScope">${options}</select>
-                <small class="sipd-field-hint">${localize("SIPD.Dialog.TokenScopeHint")}</small>
               </div>
             </div>`;
 }
@@ -2180,14 +2199,24 @@ function squareCropMarkup({width, height, video=false, checked=false}) {
               </label>`;
 }
 
-// Background removal and the frame of a token picture, with a live preview. Collapsed until a choice is made.
+// The result of the background and frame choices, below the original picture. Shown once one of them is on.
+function pixelPreviewMarkup(pixelTools) {
+  if ( !pixelTools ) return "";
+  return `
+          <div class="sipd-result" data-option-row="pixelPreview" hidden>
+            <span class="sipd-result-label">${localize("SIPD.Dialog.ResultTitle")}</span>
+            <div class="sipd-pixel-preview" data-pixel-canvas aria-label="${escapeHtml(localize("SIPD.Dialog.PixelPreview"))}"></div>
+          </div>`;
+}
+
+// Background removal and the frame of a token picture: the picker of the frame styles, a thumbnail of each one
 function pixelToolsMarkup(pixelTools, defaults) {
   if ( !pixelTools ) return "";
-  const styleOptions = [
-    [FRAME_STYLES.NONE, "SIPD.Dialog.FrameNone"],
-    [FRAME_STYLES.ROUND, "SIPD.Dialog.FrameRound"],
-    [FRAME_STYLES.SQUARE, "SIPD.Dialog.FrameSquare"]
-  ].map(([value, key]) => `<option value="${value}"${value === defaults.frameStyle ? " selected" : ""}>${escapeHtml(localize(key))}</option>`).join("");
+  const selected = normalizeFrameStyle(defaults.frameStyle);
+  const tiles = FRAME_STYLE_LIST.map(style => {
+    const label = escapeHtml(frameStyleLabel(style));
+    return `<button type="button" class="sipd-frame-tile" role="radio" aria-checked="${style === selected}" data-frame-style="${style}" title="${label}" aria-label="${label}"></button>`;
+  }).join("");
   const sourceOptions = [
     [FRAME_COLOR_SOURCES.OWNER, "SIPD.Dialog.FrameSourceOwner"],
     [FRAME_COLOR_SOURCES.DISPOSITION, "SIPD.Dialog.FrameSourceDisposition"],
@@ -2195,31 +2224,35 @@ function pixelToolsMarkup(pixelTools, defaults) {
   ].map(([value, key]) => `<option value="${value}">${escapeHtml(localize(key))}</option>`).join("");
   return `
               <div class="sipd-pixel-tools" data-option-row="pixelTools" hidden>
-                <label class="checkbox sipd-choice-row" data-option-row="removeBackground">
-                  <input type="checkbox" name="removeBackground">
-                  <span>
-                    <strong>${localize("SIPD.Dialog.RemoveBackground")}</strong>
-                    <small data-background-note>${localize("SIPD.Dialog.RemoveBackgroundHint")}</small>
-                  </span>
-                </label>
-                <div class="sipd-pixel-fields" data-option-row="backgroundOptions" hidden>
-                  <label>${localize("SIPD.Dialog.BackgroundTolerance")}</label>
-                  <input type="range" name="backgroundTolerance" min="${BACKGROUND_TOLERANCE_MIN}" max="${BACKGROUND_TOLERANCE_MAX}" step="1" value="${BACKGROUND_TOLERANCE_DEFAULT}">
-                  <output data-output-for="backgroundTolerance">${BACKGROUND_TOLERANCE_DEFAULT}</output>
+                <div class="sipd-background-line">
+                  <label class="checkbox sipd-choice-row" data-option-row="removeBackground" title="${escapeHtml(localize("SIPD.Dialog.RemoveBackgroundHint"))}">
+                    <input type="checkbox" name="removeBackground">
+                    <span>
+                      <strong>${localize("SIPD.Dialog.RemoveBackground")}</strong>
+                      <small data-background-note hidden></small>
+                    </span>
+                  </label>
+                  <div class="sipd-pixel-fields sipd-pixel-fields--tolerance" data-option-row="backgroundOptions" hidden>
+                    <label>${localize("SIPD.Dialog.BackgroundTolerance")}</label>
+                    <input type="range" name="backgroundTolerance" min="${BACKGROUND_TOLERANCE_MIN}" max="${BACKGROUND_TOLERANCE_MAX}" step="1" value="${BACKGROUND_TOLERANCE_DEFAULT}">
+                    <output data-output-for="backgroundTolerance">${BACKGROUND_TOLERANCE_DEFAULT}</output>
+                  </div>
                 </div>
-                <div class="sipd-pixel-fields" data-option-row="frame" hidden>
-                  <label>${localize("SIPD.Dialog.Frame")}</label>
-                  <select name="frameStyle">${styleOptions}</select>
+                <div class="sipd-frame-block" data-option-row="frame" hidden>
+                  <div class="sipd-frame-head">
+                    <strong>${localize("SIPD.Dialog.Frame")}</strong>
+                    <span data-frame-name>${escapeHtml(frameStyleLabel(selected))}</span>
+                  </div>
+                  <div class="sipd-frame-grid" role="radiogroup" aria-label="${escapeHtml(localize("SIPD.Dialog.Frame"))}">${tiles}</div>
+                  <input type="hidden" name="frameStyle" value="${selected}">
+                  <div class="sipd-pixel-fields sipd-pixel-fields--frame" data-option-row="frameOptions" hidden>
+                    <select name="frameSource" aria-label="${escapeHtml(localize("SIPD.Dialog.FrameColor"))}">${sourceOptions}</select>
+                    <input type="color" name="frameColor" value="#ffffff" aria-label="${escapeHtml(localize("SIPD.Dialog.FrameColor"))}">
+                    <label>${localize("SIPD.Dialog.FrameThickness")}</label>
+                    <input type="range" name="frameThickness" min="${FRAME_THICKNESS_MIN}" max="${FRAME_THICKNESS_MAX}" step="1" value="${FRAME_THICKNESS_DEFAULT}">
+                    <output data-output-for="frameThickness">${FRAME_THICKNESS_DEFAULT}</output>
+                  </div>
                 </div>
-                <div class="sipd-pixel-fields sipd-pixel-fields--frame" data-option-row="frameOptions" hidden>
-                  <label>${localize("SIPD.Dialog.FrameColor")}</label>
-                  <select name="frameSource">${sourceOptions}</select>
-                  <input type="color" name="frameColor" value="#ffffff">
-                  <label>${localize("SIPD.Dialog.FrameThickness")}</label>
-                  <input type="range" name="frameThickness" min="${FRAME_THICKNESS_MIN}" max="${FRAME_THICKNESS_MAX}" step="1" value="${FRAME_THICKNESS_DEFAULT}">
-                  <output data-output-for="frameThickness">${FRAME_THICKNESS_DEFAULT}</output>
-                </div>
-                <div class="sipd-pixel-preview" data-option-row="pixelPreview" hidden aria-label="${escapeHtml(localize("SIPD.Dialog.PixelPreview"))}"></div>
               </div>`;
 }
 
@@ -2242,13 +2275,24 @@ function bindPixelTools(form, pixelTools, frameInfo) {
   if ( detected.transparent || !detected.plain ) {
     elements.removeBackground.disabled = true;
     note.textContent = localize(detected.transparent ? "SIPD.Dialog.BackgroundTransparent" : "SIPD.Dialog.BackgroundNotPlain");
+    note.hidden = false;
+    rows.background.title = note.textContent;
   }
 
   const canvas = document.createElement("canvas");
   canvas.className = "sipd-pixel-canvas";
   canvas.width = pixelTools.width;
   canvas.height = pixelTools.height;
-  rows.preview.append(canvas);
+  rows.preview.querySelector("[data-pixel-canvas]").append(canvas);
+  // One thumbnail per frame style
+  const tiles = [...form.querySelectorAll("[data-frame-style]")];
+  for ( const tile of tiles ) {
+    const thumbnail = document.createElement("canvas");
+    thumbnail.className = "sipd-frame-thumb";
+    thumbnail.width = FRAME_THUMB_SIZE;
+    thumbnail.height = FRAME_THUMB_SIZE;
+    tile.append(thumbnail);
+  }
 
   const color = () => resolveFrameColor({
     source: elements.frameSource.value,
@@ -2256,20 +2300,31 @@ function bindPixelTools(form, pixelTools, frameInfo) {
     ownerColor: frameInfo?.ownerColor,
     disposition: frameInfo?.disposition
   });
-  const frameActive = () => !rows.frame.hidden && (elements.frameStyle.value !== FRAME_STYLES.NONE);
+  const frameActive = () => !rows.frame.hidden && (normalizeFrameStyle(elements.frameStyle.value) !== FRAME_STYLES.NONE);
   const backgroundActive = () => !rows.background.hidden && elements.removeBackground.checked && !elements.removeBackground.disabled;
   let timer = null;
   const draw = async () => {
     if ( !form.isConnected ) return;
-    const result = await pixelTools.render({
+    const plain = await pixelTools.render({
       removeBackground: backgroundActive(),
       tolerance: Number(elements.backgroundTolerance.value),
-      squareCrop: Boolean(elements.squareCrop?.checked) && !elements.squareCrop.disabled,
-      frame: frameActive() ? {style: elements.frameStyle.value, thickness: Number(elements.frameThickness.value), color: color()} : null
+      squareCrop: Boolean(elements.squareCrop?.checked) && !elements.squareCrop.disabled
     });
+    const frameColor = color();
+    const thickness = Number(elements.frameThickness.value);
+    const result = pixelTools.framedCanvas(plain, frameActive() ? {style: elements.frameStyle.value, thickness, color: frameColor} : null);
     canvas.width = result.width;
     canvas.height = result.height;
     canvas.getContext("2d").drawImage(result, 0, 0);
+    if ( rows.frame.hidden ) return;
+    // The thumbnails keep their ring a little thicker, so the details can be seen at their size
+    for ( const tile of tiles ) {
+      const thumb = tile.querySelector("canvas");
+      const picture = pixelTools.framedCanvas(plain, {style: tile.dataset.frameStyle, thickness: Math.max(thickness, FRAME_THUMB_THICKNESS), color: frameColor}, FRAME_THUMB_SIZE);
+      thumb.width = picture.width;
+      thumb.height = picture.height;
+      thumb.getContext("2d").drawImage(picture, 0, 0);
+    }
   };
   const schedule = () => {
     clearTimeout(timer);
@@ -2280,7 +2335,11 @@ function bindPixelTools(form, pixelTools, frameInfo) {
     elements.frameColor.disabled = showColor;
     if ( showColor ) elements.frameColor.value = color();
     rows.backgroundOptions.hidden = rows.background.hidden || !backgroundActive();
-    rows.frameOptions.hidden = rows.frame.hidden || (elements.frameStyle.value === FRAME_STYLES.NONE);
+    rows.frameOptions.hidden = rows.frame.hidden || !frameActive();
+    const style = normalizeFrameStyle(elements.frameStyle.value);
+    for ( const tile of tiles ) tile.setAttribute("aria-checked", String(tile.dataset.frameStyle === style));
+    const name = form.querySelector("[data-frame-name]");
+    if ( name ) name.textContent = frameStyleLabel(style);
     rows.preview.hidden = !(backgroundActive() || frameActive());
     for ( const output of form.querySelectorAll("[data-output-for]") ) output.textContent = elements[output.dataset.outputFor].value;
     schedule();
@@ -2288,6 +2347,12 @@ function bindPixelTools(form, pixelTools, frameInfo) {
   for ( const name of ["removeBackground", "backgroundTolerance", "frameStyle", "frameSource", "frameColor", "frameThickness", "squareCrop"] ) {
     elements[name]?.addEventListener("input", sync);
     elements[name]?.addEventListener("change", sync);
+  }
+  for ( const tile of tiles ) {
+    tile.addEventListener("click", () => {
+      elements.frameStyle.value = tile.dataset.frameStyle;
+      elements.frameStyle.dispatchEvent(new Event("change", {bubbles: true}));
+    });
   }
   return {
     refresh({background=false, frame=false}={}) {
@@ -2858,6 +2923,15 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
   applyWindowState(dialog, WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   bindWindowStatePersistence(dialog, WINDOW_KEYS.IMPORT);
 
+  keepWindowInView(dialog);
+
+  // The hints of the option rows are cut to one line, the full text is the tooltip
+  form.addEventListener("pointerover", event => {
+    const row = event.target.closest?.(".sipd-choice-row");
+    const text = row?.querySelector("small")?.textContent?.trim();
+    if ( row && text && !row.title ) row.title = text;
+  });
+
   const actionField = form.elements.action;
   const shareToPlayersField = form.elements.shareToPlayers;
   const activateSceneField = form.elements.activateScene;
@@ -3019,6 +3093,23 @@ function getApplicationSize(app) {
     width: Math.max(320, Math.round(width)),
     height: Math.max(240, Math.round(height))
   };
+}
+
+// A window that grows with its content (options appear, the target changes) is moved up when its lower edge would
+// leave the screen, so the buttons stay in reach
+function keepWindowInView(app) {
+  const element = getApplicationElement(app);
+  if ( !(element instanceof HTMLElement) || (typeof ResizeObserver !== "function") ) return;
+  const margin = 8;
+  const fit = () => {
+    if ( !element.isConnected ) return;
+    const rect = element.getBoundingClientRect();
+    if ( !(rect.height > 0) ) return;
+    const top = Math.max(margin, Math.min(rect.top, window.innerHeight - rect.height - margin));
+    if ( Math.abs(top - rect.top) > 1 ) app.setPosition?.({top});
+  };
+  new ResizeObserver(fit).observe(element);
+  fit();
 }
 
 function applyWindowState(app, key, fallback={}) {
