@@ -947,7 +947,13 @@ function createWindowClass() {
 
     _replaceHTML(result, content) {
       content.innerHTML = result;
-      content.querySelector(".sh-focus")?.scrollIntoView?.({ block: "center" });
+    }
+
+    async _onRender(context, options) {
+      await super._onRender(context, options);
+      // The module a hint asked for: scrolled into view once the window is in the page and laid out
+      const focus = this.element?.querySelector?.(".sh-focus");
+      if (focus) globalThis.requestAnimationFrame?.(() => focus.scrollIntoView?.({ block: "center" }));
     }
   };
 }
