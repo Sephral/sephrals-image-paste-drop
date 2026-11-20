@@ -1,5 +1,24 @@
 import {
+  BACKGROUND_TOLERANCE_DEFAULT,
+  BACKGROUND_TOLERANCE_MAX,
+  BACKGROUND_TOLERANCE_MIN,
+  FRAME_COLOR_SOURCES,
+  FRAME_STYLES,
+  FRAME_THICKNESS_DEFAULT,
+  FRAME_THICKNESS_MAX,
+  FRAME_THICKNESS_MIN,
+  createPixelPreview,
+  normalizeFrameSource,
+  normalizeFrameStyle,
+  normalizeFrameThickness,
+  normalizeHexColor,
+  normalizeTolerance,
+  processPictureFile,
+  resolveFrameColor
+} from "./pixel-tools.js";
+import {
   cropImageToSquare,
+  isAnimatedFile,
   describeOptimizationPlan,
   getImageOptimizationPlan,
   hasOptimizationOptions,
@@ -71,6 +90,7 @@ const AUTO_GRID_SETTING = "autoGrid";
 const ASK_TOKEN_SCOPE_SETTING = "askTokenScope";
 const LAST_TOKEN_SCOPE_SETTING = "lastTokenScope";
 const SQUARE_TOKEN_CROP_SETTING = "squareTokenCrop";
+const TOKEN_FRAME_SETTING = "tokenFrame";
 const DEFAULT_ACTION_SETTING = "defaultAction";
 const REMEMBER_LAST_ACTION_SETTING = "rememberLastAction";
 const LAST_ACTION_SETTING = "lastAction";
@@ -437,6 +457,20 @@ Hooks.once("init", () => {
     default: false
   });
 
+  game.settings.register(MODULE_ID, TOKEN_FRAME_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.TokenFrame.Label"),
+    hint: localize("SIPD.Settings.TokenFrame.Hint"),
+    type: String,
+    choices: {
+      [FRAME_STYLES.NONE]: localize("SIPD.Dialog.FrameNone"),
+      [FRAME_STYLES.ROUND]: localize("SIPD.Dialog.FrameRound"),
+      [FRAME_STYLES.SQUARE]: localize("SIPD.Dialog.FrameSquare")
+    },
+    default: FRAME_STYLES.NONE
+  });
+
   game.settings.register(MODULE_ID, DROP_INDICATOR_SETTING, {
     scope: "client",
     config: true,
@@ -654,7 +688,7 @@ Hooks.once("init", () => {
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
       "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridKept", "gridChanged", "gridFitted", "hexScene",
-      "imageRestored", "webpChosen"],
+      "imageRestored", "webpChosen", "backgroundRemoved", "frameAdded"],
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING, AUTO_GRID_SETTING]
   });
 
@@ -1097,6 +1131,7 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     // The WebP conversion has its own choice in the dialog, so the plan here is the shrinking alone
     const optimizePlan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, {...getImageOptimizationOptions(), webp: false});
     const webpTools = video ? null : await createWebpTools(preparedFile, dimensions);
+    const pixelTools = video ? null : await createPixelTools(preparedFile);
     // The original name, a copied link or a file such as "Tavern 30x20.webp" may name the grid of a new scene
     let grid = detectGridFromFileName(file.name, dimensions);
     // Without a grid in the name the picture itself is searched. The dialog opens at once and fills the grid in when
@@ -1115,7 +1150,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       video,
       grid,
       gridTools: grid ? null : gridTools,
-      webpTools
+      webpTools,
+      pixelTools
     });
     if ( !decision ) return;
 
@@ -1127,8 +1163,21 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     const needsUpload = requiresPersistentPath(decision.action, decision.shareToPlayers);
     // A token picture may be cut to its centered square first
     const cropped = (needsUpload && decision.squareCrop && !video) ? await cropImageToSquare(preparedFile, dimensions) : null;
-    const source = cropped?.changed ? cropped.file : preparedFile;
-    const sourceSize = cropped?.changed ? {width: cropped.width, height: cropped.height} : dimensions;
+    let source = cropped?.changed ? cropped.file : preparedFile;
+    let sourceSize = cropped?.changed ? {width: cropped.width, height: cropped.height} : dimensions;
+    // Then the background goes and the frame is drawn, before shrinking and WebP
+    const cutBackground = needsUpload && !video && Boolean(decision.removeBackground);
+    const frame = (needsUpload && !video) ? resolveDecisionFrame(decision, context) : null;
+    const pixels = (cutBackground || frame)
+      ? await processPictureFile(source, {removeBackground: cutBackground, tolerance: decision.backgroundTolerance, frame})
+      : null;
+    if ( pixels?.file ) {
+      source = pixels.file;
+      sourceSize = {width: pixels.width, height: pixels.height};
+    }
+    if ( cutBackground && pixels?.backgroundSkipped ) {
+      ui.notifications.info(localize(pixels.backgroundSkipped === "transparent" ? "SIPD.Notification.BackgroundTransparent" : "SIPD.Notification.BackgroundNotPlain"));
+    }
     const upload = needsUpload
       ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize, webp: decision.webp})
       : {file: preparedFile, ...dimensions};
@@ -1155,6 +1204,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       dropPoint,
       context
     });
+    if ( pixels?.backgroundRemoved ) countFeature(MODULE_ID, "backgroundRemoved");
+    if ( pixels?.frameAdded ) countFeature(MODULE_ID, "frameAdded");
     if ( gridKept ) countFeature(MODULE_ID, "gridKept");
     if ( gridChanged ) countFeature(MODULE_ID, "gridChanged");
     if ( decision.webp && needsUpload && !getImageOptimizationOptions().webp ) countFeature(MODULE_ID, "webpChosen");
@@ -1205,6 +1256,70 @@ function getSquareTokenCropDefault() {
   }
 }
 
+function getTokenFrameDefault() {
+  try {
+    return normalizeFrameStyle(game.settings.get(MODULE_ID, TOKEN_FRAME_SETTING));
+  } catch (_error) {
+    return FRAME_STYLES.NONE;
+  }
+}
+
+// The colour of the player who owns the actor (a player before the GM, an online one first), else the user's own
+function getOwnerColor(actor) {
+  const users = Array.from(game.users ?? []);
+  const owners = actor ? users.filter(user => !user.isGM && actor.testUserPermission?.(user, "OWNER")) : [];
+  const user = owners.find(entry => entry.active) ?? owners[0] ?? game.user;
+  return normalizeHexColor(user?.color?.css ?? String(user?.color ?? ""));
+}
+
+// What the frame colours depend on: the token or actor the picture is for
+function getFrameContextInfo(context=null) {
+  let token = null;
+  let actor = null;
+  try {
+    token = getEligibleTokens(context)[0] ?? null;
+    actor = token?.actor ?? token?.document?.actor ?? getEligibleActors(context)[0] ?? null;
+  } catch (_error) {
+    // No canvas, no token
+  }
+  const neutral = globalThis.CONST?.TOKEN_DISPOSITIONS?.NEUTRAL ?? 0;
+  return {
+    ownerColor: getOwnerColor(actor),
+    disposition: token?.document?.disposition ?? actor?.prototypeToken?.disposition ?? neutral
+  };
+}
+
+// The frame to draw: style, ring thickness and the colour of the chosen source, or null without a frame
+function resolveDecisionFrame(decision, context=null) {
+  const frame = decision?.frame;
+  if ( !frame || (normalizeFrameStyle(frame.style) === FRAME_STYLES.NONE) ) return null;
+  const info = getFrameContextInfo(context);
+  return {
+    style: frame.style,
+    thickness: frame.thickness,
+    color: resolveFrameColor({source: frame.source, custom: frame.custom, ownerColor: info.ownerColor, disposition: info.disposition})
+  };
+}
+
+// The picture tools of one import, or null when the picture cannot be worked on (video, GIF, SVG, animated pictures)
+async function createPixelTools(file) {
+  try {
+    if ( !file || (typeof globalThis.createImageBitmap !== "function") || await isAnimatedFile(file) ) return null;
+    return await createPixelPreview(file);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function normalizeFrameChoice(frame, allowed=true) {
+  return {
+    style: allowed ? normalizeFrameStyle(frame?.style) : FRAME_STYLES.NONE,
+    source: normalizeFrameSource(frame?.source),
+    custom: normalizeHexColor(frame?.custom, "#ffffff"),
+    thickness: normalizeFrameThickness(frame?.thickness)
+  };
+}
+
 function askForTokenScope() {
   try {
     return game.settings.get(MODULE_ID, ASK_TOKEN_SCOPE_SETTING) !== false;
@@ -1237,6 +1352,7 @@ function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=nul
     recipients: [],
     tokenScope: getLastTokenScope(),
     squareCrop: getSquareTokenCropDefault(),
+    frame: {style: getTokenFrameDefault()},
     chatMode: CHAT_MODES.CURRENT,
     optimize: true,
     grid: grid ? gridChoiceFromSource(grid) : null,
@@ -1545,7 +1661,7 @@ function getUrlHostLabel(url) {
 }
 
 async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null, gridTools=null, webpTools=null}) {
+  video=false, grid=null, context=null, gridTools=null, webpTools=null, pixelTools=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
@@ -1558,7 +1674,8 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
     grid,
     context,
     gridTools,
-    webpTools
+    webpTools,
+    pixelTools
   }), {remoteUrl, video, context});
   if ( !decision ) return null;
 
@@ -1603,6 +1720,9 @@ function normalizeActionDecision(decision, {remoteUrl=false, video=false, contex
     prototypeToken: behavior.supportsPrototypeToken && (tokenScope !== TOKEN_SCOPES.TOKEN),
     tokenScope,
     squareCrop: behavior.supportsPrototypeToken && !video && Boolean(decision.squareCrop),
+    removeBackground: !video && PIXEL_ACTIONS.includes(action) && Boolean(decision.removeBackground),
+    backgroundTolerance: normalizeTolerance(decision.backgroundTolerance),
+    frame: normalizeFrameChoice(decision.frame, behavior.supportsPrototypeToken && !video),
     gridSource: behavior.supportsGrid ? (decision.gridSource ?? null) : null,
     chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
     optimize: readOptimizeChoice(decision),
@@ -1862,7 +1982,7 @@ async function readVideoDimensions(src) {
 }
 
 async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null, gridTools=null, webpTools=null}) {
+  video=false, grid=null, context=null, gridTools=null, webpTools=null, pixelTools=null}) {
   const defaults = getDialogDefaults({remoteUrl, video, context});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
@@ -1949,6 +2069,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
             ${recipientsMarkup(getShareRecipientChoices())}
             <div class="form-group stacked sipd-choice-stack">
               ${squareCropMarkup({width, height, video, checked: defaults.squareCrop})}
+              ${pixelToolsMarkup(pixelTools, defaults)}
               <label class="checkbox sipd-choice-row" data-option-row="shareToPlayers">
                 <input type="checkbox" name="shareToPlayers"${defaults.shareToPlayers ? " checked" : ""}>
                 <span>
@@ -1989,7 +2110,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     position: {...importWindowState, height: "auto"},
     content,
     modal: true,
-    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height, gridTools, webpTools}),
+    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height, gridTools, webpTools, pixelTools, frameInfo: pixelTools ? getFrameContextInfo(context) : null}),
     buttons: [
       {
         action: "confirm",
@@ -2005,6 +2126,14 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           recipients: readCheckedRecipients(button.form),
           tokenScope: button.form.elements.tokenScope?.value ?? TOKEN_SCOPES.TOKEN,
           squareCrop: Boolean(button.form.elements.squareCrop?.checked),
+          removeBackground: Boolean(button.form.elements.removeBackground?.checked),
+          backgroundTolerance: button.form.elements.backgroundTolerance?.value ?? BACKGROUND_TOLERANCE_DEFAULT,
+          frame: {
+            style: button.form.elements.frameStyle?.value ?? FRAME_STYLES.NONE,
+            source: button.form.elements.frameSource?.value ?? FRAME_COLOR_SOURCES.OWNER,
+            custom: button.form.elements.frameColor?.value ?? "#ffffff",
+            thickness: button.form.elements.frameThickness?.value ?? FRAME_THICKNESS_DEFAULT
+          },
           chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
           optimize: readOptimizeCheckbox(button.form),
           webp: button.form.elements.webp ? Boolean(button.form.elements.webp.checked) : null,
@@ -2049,6 +2178,125 @@ function squareCropMarkup({width, height, video=false, checked=false}) {
                   <small>${localize("SIPD.Dialog.SquareCropHint")}</small>
                 </span>
               </label>`;
+}
+
+// Background removal and the frame of a token picture, with a live preview. Collapsed until a choice is made.
+function pixelToolsMarkup(pixelTools, defaults) {
+  if ( !pixelTools ) return "";
+  const styleOptions = [
+    [FRAME_STYLES.NONE, "SIPD.Dialog.FrameNone"],
+    [FRAME_STYLES.ROUND, "SIPD.Dialog.FrameRound"],
+    [FRAME_STYLES.SQUARE, "SIPD.Dialog.FrameSquare"]
+  ].map(([value, key]) => `<option value="${value}"${value === defaults.frameStyle ? " selected" : ""}>${escapeHtml(localize(key))}</option>`).join("");
+  const sourceOptions = [
+    [FRAME_COLOR_SOURCES.OWNER, "SIPD.Dialog.FrameSourceOwner"],
+    [FRAME_COLOR_SOURCES.DISPOSITION, "SIPD.Dialog.FrameSourceDisposition"],
+    [FRAME_COLOR_SOURCES.CUSTOM, "SIPD.Dialog.FrameSourceCustom"]
+  ].map(([value, key]) => `<option value="${value}">${escapeHtml(localize(key))}</option>`).join("");
+  return `
+              <div class="sipd-pixel-tools" data-option-row="pixelTools" hidden>
+                <label class="checkbox sipd-choice-row" data-option-row="removeBackground">
+                  <input type="checkbox" name="removeBackground">
+                  <span>
+                    <strong>${localize("SIPD.Dialog.RemoveBackground")}</strong>
+                    <small data-background-note>${localize("SIPD.Dialog.RemoveBackgroundHint")}</small>
+                  </span>
+                </label>
+                <div class="sipd-pixel-fields" data-option-row="backgroundOptions" hidden>
+                  <label>${localize("SIPD.Dialog.BackgroundTolerance")}</label>
+                  <input type="range" name="backgroundTolerance" min="${BACKGROUND_TOLERANCE_MIN}" max="${BACKGROUND_TOLERANCE_MAX}" step="1" value="${BACKGROUND_TOLERANCE_DEFAULT}">
+                  <output data-output-for="backgroundTolerance">${BACKGROUND_TOLERANCE_DEFAULT}</output>
+                </div>
+                <div class="sipd-pixel-fields" data-option-row="frame" hidden>
+                  <label>${localize("SIPD.Dialog.Frame")}</label>
+                  <select name="frameStyle">${styleOptions}</select>
+                </div>
+                <div class="sipd-pixel-fields sipd-pixel-fields--frame" data-option-row="frameOptions" hidden>
+                  <label>${localize("SIPD.Dialog.FrameColor")}</label>
+                  <select name="frameSource">${sourceOptions}</select>
+                  <input type="color" name="frameColor" value="#ffffff">
+                  <label>${localize("SIPD.Dialog.FrameThickness")}</label>
+                  <input type="range" name="frameThickness" min="${FRAME_THICKNESS_MIN}" max="${FRAME_THICKNESS_MAX}" step="1" value="${FRAME_THICKNESS_DEFAULT}">
+                  <output data-output-for="frameThickness">${FRAME_THICKNESS_DEFAULT}</output>
+                </div>
+                <div class="sipd-pixel-preview" data-option-row="pixelPreview" hidden aria-label="${escapeHtml(localize("SIPD.Dialog.PixelPreview"))}"></div>
+              </div>`;
+}
+
+// Wires the background and frame rows: the preview is redrawn a moment after every change. Returns refresh(), which
+// shows the rows that fit the chosen target.
+function bindPixelTools(form, pixelTools, frameInfo) {
+  if ( !pixelTools ) return {refresh: () => {}};
+  const elements = form.elements;
+  const row = name => form.querySelector(`[data-option-row="${name}"]`);
+  const rows = {
+    tools: row("pixelTools"),
+    background: row("removeBackground"),
+    backgroundOptions: row("backgroundOptions"),
+    frame: row("frame"),
+    frameOptions: row("frameOptions"),
+    preview: row("pixelPreview")
+  };
+  const note = form.querySelector("[data-background-note]");
+  const detected = pixelTools.detected;
+  if ( detected.transparent || !detected.plain ) {
+    elements.removeBackground.disabled = true;
+    note.textContent = localize(detected.transparent ? "SIPD.Dialog.BackgroundTransparent" : "SIPD.Dialog.BackgroundNotPlain");
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.className = "sipd-pixel-canvas";
+  canvas.width = pixelTools.width;
+  canvas.height = pixelTools.height;
+  rows.preview.append(canvas);
+
+  const color = () => resolveFrameColor({
+    source: elements.frameSource.value,
+    custom: elements.frameColor.value,
+    ownerColor: frameInfo?.ownerColor,
+    disposition: frameInfo?.disposition
+  });
+  const frameActive = () => !rows.frame.hidden && (elements.frameStyle.value !== FRAME_STYLES.NONE);
+  const backgroundActive = () => !rows.background.hidden && elements.removeBackground.checked && !elements.removeBackground.disabled;
+  let timer = null;
+  const draw = async () => {
+    if ( !form.isConnected ) return;
+    const result = await pixelTools.render({
+      removeBackground: backgroundActive(),
+      tolerance: Number(elements.backgroundTolerance.value),
+      squareCrop: Boolean(elements.squareCrop?.checked) && !elements.squareCrop.disabled,
+      frame: frameActive() ? {style: elements.frameStyle.value, thickness: Number(elements.frameThickness.value), color: color()} : null
+    });
+    canvas.width = result.width;
+    canvas.height = result.height;
+    canvas.getContext("2d").drawImage(result, 0, 0);
+  };
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => void draw(), 50);
+  };
+  const sync = () => {
+    const showColor = elements.frameSource.value !== FRAME_COLOR_SOURCES.CUSTOM;
+    elements.frameColor.disabled = showColor;
+    if ( showColor ) elements.frameColor.value = color();
+    rows.backgroundOptions.hidden = rows.background.hidden || !backgroundActive();
+    rows.frameOptions.hidden = rows.frame.hidden || (elements.frameStyle.value === FRAME_STYLES.NONE);
+    rows.preview.hidden = !(backgroundActive() || frameActive());
+    for ( const output of form.querySelectorAll("[data-output-for]") ) output.textContent = elements[output.dataset.outputFor].value;
+    schedule();
+  };
+  for ( const name of ["removeBackground", "backgroundTolerance", "frameStyle", "frameSource", "frameColor", "frameThickness", "squareCrop"] ) {
+    elements[name]?.addEventListener("input", sync);
+    elements[name]?.addEventListener("change", sync);
+  }
+  return {
+    refresh({background=false, frame=false}={}) {
+      rows.tools.hidden = !(background || frame);
+      rows.background.hidden = !background;
+      rows.frame.hidden = !frame;
+      sync();
+    }
+  };
 }
 
 // Checkbox for uploads that get shrunk or converted. Checked by default, unchecked uploads the original file.
@@ -2517,6 +2765,9 @@ function isActionAvailable(action, context=null) {
   return true;
 }
 
+// The targets that take the background out and the one that gets a frame
+const PIXEL_ACTIONS = Object.freeze([ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT]);
+
 const NO_ACTION_OPTIONS = Object.freeze({
   supportsShareToPlayers: false,
   supportsActivateScene: false,
@@ -2586,7 +2837,7 @@ function actionUsesSelectableUploadDirectory(action) {
   return getActionBehavior(action).supportsUploadDirectory;
 }
 
-function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0, gridTools=null, webpTools=null}={}) {
+function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0, gridTools=null, webpTools=null, pixelTools=null, frameInfo=null}={}) {
   const form = dialog.element.querySelector("form");
   if ( !form ) return;
 
@@ -2633,6 +2884,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     if ( !row ) return;
     row.hidden = !visible;
   };
+  const pixelUi = bindPixelTools(form, pixelTools, frameInfo);
   // Players upload into a fixed folder and may only share when the GM allows it.
   const canShare = canUserShareImages();
   const canChooseDirectory = Boolean(game.user?.isGM);
@@ -2659,6 +2911,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
     setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken && askForTokenScope());
     setRowVisible(optionRows.squareCrop, behavior.supportsPrototypeToken);
+    pixelUi.refresh({background: PIXEL_ACTIONS.includes(actionField.value), frame: behavior.supportsPrototypeToken});
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
     setRowVisible(optionRows.grid, behavior.supportsGrid);
     const uploads = requiresPersistentPath(actionField.value, sharing);
@@ -2710,6 +2963,7 @@ function getDialogDefaults({remoteUrl=false, video=false, context=null}={}) {
     uploadDirectoryChoices: getUploadDirectoryChoices(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
     tokenScope: getLastTokenScope(),
     squareCrop: getSquareTokenCropDefault(),
+    frameStyle: getTokenFrameDefault(),
     uiTheme: getUITheme()
   };
 }
@@ -4518,6 +4772,10 @@ export const __test__ = {
   SQUARE_TOKEN_CROP_SETTING,
   tokenScopeMarkup,
   squareCropMarkup,
+  pixelToolsMarkup,
+  resolveDecisionFrame,
+  getOwnerColor,
+  TOKEN_FRAME_SETTING,
   askForTokenScope,
   AUTO_GRID_SETTING,
   DEFAULT_SHARE_SETTING,

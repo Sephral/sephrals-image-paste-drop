@@ -152,6 +152,18 @@ The last choice is kept per user and preselected the next time. The setting *Ask
 
 *Cut to a square* (a box in the dialog, shown for pictures that are not square) saves the centered square of the picture, which is what round and square token frames show anyway. The setting *Cut token pictures to a square* ticks the box in advance and applies to the shortcuts. It is off by default because the edges of the picture are lost. PNG, JPEG and WebP are cut, animated pictures, GIF, AVIF and SVG stay as they are, as do videos. The cut happens before the upload and before shrinking and WebP conversion.
 
+### Removing the background
+
+*Remove the background* (a box in the dialog for the token and the portrait target) makes a plain background see-through. It works on your computer only, no picture leaves the browser and no outside service or model is used. The module looks at the edge of the picture: when one colour (or two) covers most of it, that is the background. From every edge pixel it then clears all connected pixels that are close to the background colour (a flood fill), so a hole in the figure that has the same colour stays. The edge of the cut is softened by two pixels. The slider *Tolerance* decides how far from the background colour a pixel may be and still go. A small preview with a checkerboard behind it shows the result while you move the slider.
+
+The box is switched off, with a note, when the edge of the picture is already see-through or is not one plain colour. It is not offered for videos, GIF, SVG, animated pictures and AVIF. The work runs in chunks so the dialog stays usable, on a copy of at most 4096 pixels on the longer side. The result is saved as PNG, or as WebP with its transparency when WebP is chosen. The cut happens after the square cut and before the frame, shrinking and WebP conversion. Nothing is remembered, the box starts unticked every time, and the shortcuts never remove a background.
+
+### Token frame
+
+For the token target the dialog has the row *Frame*: no frame, a round ring or a square ring. The ring is drawn into the picture before it is saved (after the cut and the background removal, before shrinking and WebP), so it needs no module on other computers. A round ring also makes everything outside the circle see-through. The colour comes from the player who owns the actor (an online player first, else the GM's own colour), from the disposition of the token (friendly, neutral, hostile, secret, the colours Foundry draws token borders in) or from a colour you pick. The slider *Thickness* is a share of the shorter side, 2 to 12 percent. Pictures that are not square get the ring on their own shape, so cut them to a square first. The rows stay collapsed until a choice is made, and the preview shows ring and cut together.
+
+The setting *Frame for token pictures* preselects a frame in the dialog and also applies to the shortcuts. It is off by default. The colour source and the thickness always start with the owner colour and 5 percent. The portrait never gets a frame.
+
 The portrait target changes the portrait of the actors of the selected tokens. Without a selected token it changes the portrait of the character assigned to you.
 
 ## Chat posts
@@ -254,7 +266,7 @@ Every user can configure on the module settings page:
 * whether clipboard paste triggers the module
 * whether drag and drop triggers the module
 * whether the printed grid of a map is searched when it becomes a new scene
-* whether the import window asks what a token picture changes, and whether token pictures are cut to a square
+* whether the import window asks what a token picture changes, whether token pictures are cut to a square, and which frame token pictures get
 * whether the drop target is shown while dragging
 * the default target
 * whether the last successful target is reused automatically (for single images and for batches separately)
@@ -296,6 +308,7 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
 * how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map, how many keep the found grid unchanged, how many get another grid after one was found (typed, measured or another grid type) and how many get a hexagon grid
+* how often a background is removed from a picture, and how often a frame is drawn into a token picture
 * how often a replaced picture is put back, and how often *Upload as WebP* is ticked in the dialog while the setting is off
 * the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP*, *Show the drop target while dragging* and *Look for the grid on maps* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module

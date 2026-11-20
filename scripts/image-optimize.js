@@ -179,6 +179,11 @@ async function readImageHeader(file) {
   }
 }
 
+// Whether a file holds several frames, which a canvas would flatten to one
+async function isAnimatedFile(file) {
+  return isAnimatedImageData(await readImageHeader(file), file?.type);
+}
+
 async function getImageOptimizationPlan(file, {width, height}, options={}) {
   if ( !file || !hasOptimizationOptions(options) ) return null;
   const header = await readImageHeader(file);
@@ -337,6 +342,7 @@ export {
   PASSTHROUGH_TYPES,
   squareCropRect,
   cropImageToSquare,
+  isAnimatedFile,
   computeScaledSize,
   normalizeQuality,
   isAnimatedImageData,

@@ -92,8 +92,8 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 28 module settings and the hidden consent and state settings of the usage library
-  assert.equal(env.state.registerCalls.length, 30);
+  // 29 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 31);
   const indicator = env.state.registerCalls.find((entry) => entry.key === __test__.DROP_INDICATOR_SETTING);
   assert.equal(indicator.data.scope, "client");
   assert.equal(indicator.data.default, true);
@@ -381,6 +381,9 @@ test("user access, directory, and naming helpers normalize values and permission
     prototypeToken: false,
     tokenScope: "token",
     squareCrop: false,
+    removeBackground: false,
+    backgroundTolerance: 24,
+    frame: { style: "none", source: "owner", custom: "#ffffff", thickness: 5 },
     gridSource: null,
     chatMode: "current",
     optimize: true,
@@ -469,6 +472,9 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     recipients: [],
     tokenScope: "token",
     squareCrop: false,
+    removeBackground: false,
+    backgroundTolerance: 24,
+    frame: { style: "none", source: "owner", custom: "#ffffff", thickness: 5 },
     gridSource: null,
     chatMode: "current",
     optimize: true,
@@ -2445,6 +2451,11 @@ test("a shortcut target that is not possible right now opens the dialog instead"
     setSetting(__test__.DEFAULT_ACTION_SETTING, ACTIONS.PREVIEW_ONLY);
     assert.equal(__test__.getQuickAction(QUICK_TARGETS.DEFAULT), ACTIONS.PREVIEW_ONLY);
     assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT).action, ACTIONS.PREVIEW_ONLY);
+    // The frame default reaches shortcuts, the background never does
+    setSetting(__test__.TOKEN_FRAME_SETTING, "round");
+    assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT).frame.style, "none", "preview target takes no frame");
+    assert.equal(__test__.buildQuickDecision(QUICK_TARGETS.DEFAULT).removeBackground, false);
+    setSetting(__test__.TOKEN_FRAME_SETTING, "none");
   } finally {
     env.state.localizations.delete("SIPD.Quick.Unavailable");
     env.state.localizations.delete("SIPD.Action.TokenImage");
@@ -3091,4 +3102,26 @@ test("the dialog shows the size as WebP next to the original and the checkbox fo
     globalThis.createImageBitmap = originalBitmap;
     globalThis.OffscreenCanvas = originalCanvas;
   }
+});
+
+test("background removal and frame belong to token and portrait pictures only", () => {
+  const ACTIONS = __test__.ACTIONS;
+  const frame = { style: "round", source: "custom", custom: "#FF0000", thickness: 9 };
+  const token = __test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, removeBackground: true, backgroundTolerance: 40, frame });
+  assert.equal(token.removeBackground, true);
+  assert.equal(token.backgroundTolerance, 40);
+  assert.deepEqual(token.frame, { style: "round", source: "custom", custom: "#ff0000", thickness: 9 });
+  const portrait = __test__.normalizeActionDecision({ action: ACTIONS.ACTOR_PORTRAIT, removeBackground: true, frame });
+  assert.equal(portrait.removeBackground, true);
+  assert.equal(portrait.frame.style, "none");
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.CHAT_IMAGE, removeBackground: true, frame }).removeBackground, false);
+  const video = __test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, removeBackground: true, frame }, { video: true });
+  assert.equal(video.removeBackground, false);
+  assert.equal(video.frame.style, "none");
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, backgroundTolerance: "x" }).backgroundTolerance, 24);
+  assert.equal(__test__.pixelToolsMarkup(null, {}), "");
+  const markup = __test__.pixelToolsMarkup({ detected: {} }, { frameStyle: "square" });
+  assert.ok(markup.includes("name=\"removeBackground\"") && markup.includes("<option value=\"square\" selected>"));
+  assert.equal(__test__.resolveDecisionFrame({ frame: { style: "none" } }), null);
+  assert.deepEqual(__test__.resolveDecisionFrame({ frame }), { style: "round", thickness: 9, color: "#ff0000" });
 });

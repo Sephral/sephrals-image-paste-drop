@@ -995,3 +995,50 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* Background removal and token frame */
+.sipd-pixel-tools {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.sipd-pixel-tools[hidden],
+.sipd-pixel-tools [hidden] {
+  display: none !important;
+}
+
+.sipd-pixel-fields {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.4rem 0.6rem;
+  align-items: center;
+  padding: 0 0.2rem;
+}
+
+.sipd-pixel-fields select,
+.sipd-pixel-fields input[type="range"] {
+  min-width: 0;
+}
+
+.sipd-pixel-fields--frame input[type="color"] {
+  width: 2.2rem;
+  height: 1.6rem;
+  padding: 0;
+}
+
+.sipd-pixel-preview {
+  display: flex;
+  justify-content: center;
+}
+
+.sipd-pixel-canvas {
+  width: 9rem;
+  height: auto;
+  max-height: 9rem;
+  object-fit: contain;
+  border: 1px solid var(--sipd-line);
+  border-radius: var(--sipd-radius-md);
+  background-color: #ffffff;
+  background-image: conic-gradient(#c9c9c9 25%, transparent 25% 50%, #c9c9c9 50% 75%, transparent 75%);
+  background-size: 14px 14px;
+}
