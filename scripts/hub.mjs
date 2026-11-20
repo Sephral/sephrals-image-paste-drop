@@ -9,9 +9,13 @@
  * wins, whatever its age: once a copy is released, every change of the window raises HUB_LIB_VERSION and every change
  * of CATALOG or INTEGRATIONS raises CATALOG_REVISION. Modules without a copy (older releases) still appear, their self
  * test runs through api.runSelfTest. The debug file button uses scripts/debug-file.mjs beside this file.
+ *
+ * Since version 4 the window counts how it is used through scripts/usage.mjs beside this file (library 6 or newer,
+ * countHub): opened, the other modules unfolded, a video or install link of a module not installed, a module installed
+ * or switched on. Only actions, never which module, and only where the GM agreed to the usage statistics.
  */
 
-export const HUB_LIB_VERSION = 3;
+export const HUB_LIB_VERSION = 4;
 export const CATALOG_REVISION = 2026111402;
 
 const REGISTRY_KEY = "sephralsHub";
@@ -432,6 +436,16 @@ function hookReady() {
   globalThis.Hooks.once("ready", showInstalled);
 }
 
+/**
+ * Count a use of the window in the usage statistics (usage.mjs beside this file, HUB_FEATURES there). Does nothing
+ * without the GM's consent, on players' screens or next to a library older than 6. Never throws.
+ * @param {string} key
+ * @returns {Promise<void>}
+ */
+export function countUse(key) {
+  return import("./usage.mjs").then((usage) => usage.countHub?.(key)).catch(() => {});
+}
+
 /** Open the window. GMs only. */
 export function openSephralsModules() {
   if (!globalThis.game?.user?.isGM) {
@@ -708,6 +722,7 @@ async function enableModule(moduleId) {
     rejectClose: false
   });
   if (!confirmed) return;
+  await countUse("hubEnable");
   const key = foundry.applications?.sidebar?.apps?.ModuleManagement?.SETTING ?? "moduleConfiguration";
   const configuration = foundry.utils.deepClone(game.settings.get("core", key) ?? {});
   for (const id of ids) configuration[id] = true;
@@ -745,7 +760,8 @@ function showInstalled() {
   if (state !== "show") return;
   writePending(null);
   justInstalled = pending.id;
-  openSephralsModules();
+  void countUse("hubInstalled");
+  openWindow({ auto: true });
 }
 
 async function copyLink(entry) {
@@ -766,7 +782,11 @@ async function copyLink(entry) {
 
 let WindowClass = null;
 
-function openWindow() {
+/**
+ * @param {{auto?: boolean}} [options]   auto: opened by the window itself, not by the GM (older copies pass nothing)
+ */
+function openWindow({ auto = false } = {}) {
+  if (!auto) void countUse("hubOpen");
   WindowClass ??= createWindowClass();
   const existing = globalThis.foundry.applications.instances?.get?.(WINDOW_ID);
   if (existing) {
@@ -826,6 +846,15 @@ function createWindowClass() {
 
     get title() {
       return text("title");
+    }
+
+    async _onFirstRender(context, options) {
+      await super._onFirstRender(context, options);
+      // Elements with data-count are counted when clicked: links, install and video buttons of other modules
+      this.element.addEventListener("click", (event) => {
+        const key = event.target?.closest?.("[data-count]")?.dataset.count;
+        if (key) void countUse(key);
+      });
     }
 
     async _renderHTML() {
@@ -976,14 +1005,14 @@ function videoButton(entry) {
   return demoVideo(entry) ? iconButton("video", entry.id, text("video"), "fa-solid fa-play", "sh-flame") : "";
 }
 
-function link(href, label, icon = "fa-solid fa-arrow-up-right-from-square") {
-  return `<a href="${escape(href)}" target="_blank" rel="noopener">${escape(label)} <i class="${icon}" aria-hidden="true"></i></a>`;
+function link(href, label, icon = "fa-solid fa-arrow-up-right-from-square", count = "") {
+  return `<a href="${escape(href)}" target="_blank" rel="noopener"${count ? ` data-count="${count}"` : ""}>${escape(label)} <i class="${icon}" aria-hidden="true"></i></a>`;
 }
 
 function packageLink(entry) {
   return entry.listed
-    ? link(`https://foundryvtt.com/packages/${entry.id}`, text("packagePage"))
-    : link(`${GITHUB}/${entry.id}`, text("github"));
+    ? link(`https://foundryvtt.com/packages/${entry.id}`, text("packagePage"), undefined, "hubLink")
+    : link(`${GITHUB}/${entry.id}`, text("github"), undefined, "hubLink");
 }
 
 function iconButton(action, moduleId, label, icon, extra = "") {
@@ -1045,7 +1074,7 @@ function card(entry, extra = {}) {
   return `<li class="sh-card${extra.partner ? " sh-card-works" : ""}">
     <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${fit}</div>
     <p>${escape(extra.text ? localized(extra.text) : localized(entry.text))}</p>
-    <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="install" data-module="${escape(entry.id)}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${escape(text("install"))}</span></button>${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}${packageLink(entry)}</div>
+    <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="install" data-count="hubLink" data-module="${escape(entry.id)}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${escape(text("install"))}</span></button>${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-count="hubVideo" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}${packageLink(entry)}</div>
   </li>`;
 }
 
@@ -1091,7 +1120,7 @@ function renderContent(moreOpen) {
     groups.hidden ? `<p class="sh-hint">${escape(groups.hidden === 1 ? text("hiddenOne") : text("hidden", { count: groups.hidden }))}</p>` : ""
   ].join("") : "";
   const moreCount = fitting === 0 ? text("moreNone") : (fitting === 1 ? text("moreOne") : text("moreCount", { count: fitting }));
-  const toggle = fitting ? `<button type="button" class="sh-button" data-action="toggleMore" aria-expanded="${moreOpen}">
+  const toggle = fitting ? `<button type="button" class="sh-button" data-action="toggleMore" aria-expanded="${moreOpen}"${moreOpen ? "" : " data-count=\"hubMore\""}>
       <i class="fa-solid fa-chevron-${moreOpen ? "up" : "down"}" aria-hidden="true"></i> ${escape(text(moreOpen ? "hide" : "show"))}</button>` : "";
 
   return `

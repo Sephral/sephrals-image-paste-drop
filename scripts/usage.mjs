@@ -14,7 +14,7 @@
 /* -------------------------------------------- */
 
 /** Version of this file. Raise it with every change; the newest copy in a world runs for all modules. */
-export const LIB_VERSION = 5;
+export const LIB_VERSION = 6;
 
 /** Version of the ping format ("v"). Raise it only for breaking changes; the server keeps a parser per version. */
 export const FORMAT_VERSION = 1;
@@ -54,6 +54,19 @@ const STATE_SETTING = "usageState";
 /** Third-party modules a ping may name. Keep in sync with the list on the server. */
 const INTEGRATIONS = ["dice-so-nice", "ember", "item-piles", "lib-wrapper", "midi-qol", "ready-set-roll-5e",
   "seasons-and-stars", "socketlib", "tidy5e-sheet"];
+
+/**
+ * Counters of the window "Sephral's Modules" (hub.mjs, version 4 and newer), the same in every module. The window counts
+ * them with countHub. They are not declared by the modules, they land on one module of the world (hubCarrier) and do not
+ * mark that module as used. Since library 6.
+ * - hubOpen: the GM opened the window (not the automatic opening after an install)
+ * - hubMore: the GM unfolded the list of other modules ("More from Sephral")
+ * - hubVideo: the demo video of a module that is not installed
+ * - hubLink: the install button or the package page of a module that is not installed
+ * - hubInstalled: a module the GM set out to install from the window turned up installed at the next start
+ * - hubEnable: the GM switched on an installed module from the window
+ */
+export const HUB_FEATURES = ["hubOpen", "hubMore", "hubVideo", "hubLink", "hubInstalled", "hubEnable"];
 
 const WINDOW_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -115,6 +128,15 @@ export function countFeature(id, key, n = 1) {
 }
 
 /**
+ * Count one use of the window "Sephral's Modules". Only has an effect in the active GM's browser after the GM agreed.
+ * Never throws, never blocks. Since library 6.
+ * @param {string} key     One of HUB_FEATURES
+ */
+export function countHub(key) {
+  call("count", null, key, 1);
+}
+
+/**
  * Mark the module as used today without counting a feature, e.g. when its window opens.
  * @param {string} id      Module id
  */
@@ -133,6 +155,8 @@ export function markUsed(id) {
  * - Fields are only added, never renamed, removed or given another type. Each copy fills in the fields it uses.
  * - Module records keep {id, lib, features: Set, settings: string[]}. The active copy reads records of older copies.
  * - LIBRARY keeps {version, active, start, count, openPanel, processErrors, text} with these arguments. Only added to.
+ *   Since lib 6, count(reg, null, key, 1) counts a window counter (HUB_FEATURES); only copies of lib 6 or newer send it,
+ *   so the active copy always knows it.
  * - startOnce picks the highest version, so the active copy is never older than a record it reads.
  * - Error entries stay {stack, type}. The consent setting stays "usage" with {answer, version, id, decidedAt, asked},
  *   since lib 4 also world (the world folder the id belongs to). The setting "usageState" (lib 4) holds a state in the
@@ -371,17 +395,33 @@ function stopRecording(reg) {
 
 function count(reg, id, key, n) {
   if ( !run.recording ) return;
+  const hub = HUB_FEATURES.includes(key);
+  if ( hub ) id = hubCarrier(reg);
   const module = reg.modules.get(id);
   if ( !module ) return;
   const entry = moduleEntry(dayEntry(run.state, today()), id);
-  entry.u = 1;
+  if ( !hub ) entry.u = 1;
   if ( key !== null ) {
-    if ( !module.features.has(key) ) return debug(`${id}: undeclared feature ${key}`);
+    if ( !hub && !module.features.has(key) ) return debug(`${id}: undeclared feature ${key}`);
     const amount = Number.isInteger(n) && (n > 0) ? n : 1;
     entry.f ??= {};
     entry.f[key] = Math.min((entry.f[key] ?? 0) + amount, 100_000);
   }
   scheduleSave();
+}
+
+/**
+ * The module that keeps the window counters: the registered module with the fewest own counters, so the server's limit
+ * of counters per module is never reached, and of those the first by id.
+ * @returns {string|undefined}
+ */
+function hubCarrier(reg) {
+  let best;
+  for ( const module of reg.modules.values() ) {
+    const size = module.features?.size ?? 0;
+    if ( !best || (size < best.size) || ((size === best.size) && (module.id < best.id)) ) best = {id: module.id, size};
+  }
+  return best?.id;
 }
 
 function processErrors(reg) {
@@ -1048,6 +1088,7 @@ const TEXT = {
       "Whether the world is hosted on The Forge and which browser family the GM uses (Chrome/Edge, Firefox, Safari, or Foundry app)",
       "Which of Sephral’s modules are installed, their versions, and whether they are enabled",
       "For each enabled module: days used in the last 30 days, feature usage counts, and selected settings (e.g. theme)",
+      "How often the window Sephral’s Modules is opened and used: more modules shown, a video or install link of another module, a module installed or switched on (counts only)",
       "Errors in module code, including source file, line number, error type, whether they arose in the module itself, in another module, in the game system or in Foundry, and count, but never error messages",
       "How many of the last 30 days the GM opened Foundry and the total number of active modules (count only)",
       "Whether these third-party modules are active: Dice So Nice, Ember, Item Piles, libWrapper, Midi QoL, Ready Set Roll, Seasons & Stars, socketlib, and Tidy 5e Sheet",
@@ -1087,6 +1128,7 @@ const TEXT = {
       "Ob die Welt auf The Forge läuft und welche Browser-Familie die SL verwendet (Chrome/Edge, Firefox, Safari oder Foundry-App)",
       "Welche Sephral’s Module installiert sind, ihre Versionen und ob sie aktiviert sind",
       "Je aktiviertem Modul: Nutzungstage der letzten 30 Tage, Häufigkeit einzelner Funktionen und ausgewählte Einstellungen (z. B. Theme)",
+      "Wie oft das Fenster Sephral’s Module geöffnet und genutzt wird: weitere Module angezeigt, Video oder Installationslink eines anderen Moduls, Modul installiert oder eingeschaltet (nur die Anzahl)",
       "Fehler im Modulcode mit Quelldatei, Zeilennummer, Fehlertyp, ob sie im Modul selbst, in einem anderen Modul, im Spielsystem oder in Foundry entstanden, und Anzahl, aber ohne Fehlermeldungen",
       "An wie vielen der letzten 30 Tage die SL Foundry geöffnet hatte und wie viele Module insgesamt aktiv sind (nur die Anzahl)",
       "Ob diese Fremdmodule aktiv sind: Dice So Nice, Ember, Item Piles, libWrapper, Midi QoL, Ready Set Roll, Seasons & Stars, socketlib und Tidy 5e Sheet",
@@ -1119,4 +1161,4 @@ function text(key) {
 /** Pure helpers and internals for the shared tests. Not part of the module API. */
 export const __test__ = {TIMING, registry, run, consentAction, readConsent, optOutReason, start, sendPing, decide,
   ask, count, decorateSettings, LIBRARY, stateKey, loadState, emptyState, TEXT, ENDPOINT, OPTOUT_MODULE, INTEGRATIONS,
-  randomId, tick, leave, isDue, nextMidnight, readWorldStates, STATE_SETTING};
+  randomId, tick, leave, isDue, nextMidnight, readWorldStates, STATE_SETTING, hubCarrier};
