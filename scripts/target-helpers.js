@@ -155,7 +155,17 @@ function normalizeRecipientIds(ids, validIds) {
   return Array.from(new Set(list.map(id => String(id ?? "").trim()).filter(id => valid.has(id))));
 }
 
+// What a picture dropped onto a token changes: only the token, additionally the actor's prototype token and every
+// token of the actor on the scene, or additionally the portrait.
+const TOKEN_SCOPES = Object.freeze({TOKEN: "token", ACTOR: "actor", PORTRAIT: "portrait"});
+
+function normalizeTokenScope(value, fallback=TOKEN_SCOPES.TOKEN) {
+  return Object.values(TOKEN_SCOPES).includes(value) ? value : fallback;
+}
+
 export {
+  TOKEN_SCOPES,
+  normalizeTokenScope,
   LEGACY_ROLL_MODES,
   MESSAGE_MODES,
   VIDEO_FILE_EXTENSIONS,

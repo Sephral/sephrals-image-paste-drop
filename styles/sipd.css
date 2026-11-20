@@ -969,6 +969,12 @@
   color: var(--sipd-accent);
 }
 
+.sipd-grid-tools.is-missing .sipd-grid-button[data-grid-measure] {
+  border-color: var(--sipd-accent);
+  color: var(--sipd-accent);
+  box-shadow: 0 0 0 1px var(--sipd-accent);
+}
+
 .sipd-grid-tools .sipd-grid-number[hidden] {
   display: none;
 }

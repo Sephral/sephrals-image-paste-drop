@@ -132,3 +132,10 @@ test("videos are told by their extension and play muted in a loop in chat", () =
     '<div class="sipd-chat-images"><video src="river.webm" aria-label="River" autoplay loop muted playsinline></video><img src="map.png" alt="Map"></div>'
   );
 });
+
+test("normalizeTokenScope accepts the three scopes and falls back", () => {
+  assert.equal(helpers.normalizeTokenScope("portrait"), "portrait");
+  assert.equal(helpers.normalizeTokenScope("actor"), "actor");
+  assert.equal(helpers.normalizeTokenScope("nope"), "token");
+  assert.equal(helpers.normalizeTokenScope(undefined, "actor"), "actor");
+});

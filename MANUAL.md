@@ -93,11 +93,11 @@ Several images as one new scene each take the grid from their own file names, or
 
 ### Finding the printed grid
 
-When a map without a grid in its name becomes a new scene, the module looks at the picture itself. The dialog opens at once, the search runs in the background and fills the grid row when it is done. A yellow outline of the found grid lies over the preview, so you can check it before you insert.
+When a map without a grid in its name becomes a new scene, the module looks at the picture itself. The search only runs while the target is *Create a new scene* (also when you switch to it in the dialog, or when a shortcut creates a scene). Token pictures, tiles, journal pages and the other targets never start it. The dialog opens at once, the search runs in the background and fills the grid row when it is done. A yellow outline of the found grid lies over the preview, so you can check it before you insert.
 
 * The module finds square grids and hexagons with a pointy top or a flat top. It tells them apart, and picks the odd or even variant of the hexagon type that needs the smaller shift.
 * It finds the size of a cell down to a fraction of a pixel and the position of the grid. Foundry's grid is then shifted onto the printed one (the scene shift of Foundry 14, the background offset of Foundry 13) and the scene is stretched by a few pixels where needed, see above.
-* A map without a printed grid, or with a grid too faint to be sure about, gets the note *No printed grid found*. The module does not guess: the default grid stays and nothing is drawn over the preview.
+* A map without a printed grid, or with a grid too faint to be sure about, gets the note *No printed grid found*. The module does not guess: the default grid stays and nothing is drawn over the preview. The *Measure* button is outlined then, so the way out is right there.
 * The cells must be at least 20 pixels (Foundry's minimum) and the map at least 5 cells across. Grids with major lines every fifth cell are read as the finer grid when its lines are visible, else as the major one. Floors made of repeating tiles can look like a grid to the search. The preview is there for that reason.
 * The search works on a copy of the picture reduced to about 1200 pixels and takes one to two seconds. Linked images that the browser cannot read pixel by pixel are not searched. Videos are not searched.
 * The search needs the right to create scenes, so it only runs for GMs and Assistant GMs. The setting *Look for the grid on maps* turns the automatic search off. The buttons stay.
@@ -142,7 +142,15 @@ The new journal entry has the default permissions, so players only see the pin's
 
 ## Tokens and portraits
 
-The token target changes the image of every selected token. With "Also change the prototype token" checked, linked tokens also pass the image on to their actor's prototype token, so the next token placed from that actor uses it as well. The size of the tokens stays the same.
+The token target changes the image of every selected token, or of the token the image was dropped onto. The row *Change* decides what else gets the picture:
+
+* *Only this token*: just the token or the selected tokens (the default).
+* *The actor's prototype token and all its tokens on this scene*: the prototype token of the actor, so the next token placed from it looks the same, and every token of that actor on the scene of the token, linked or not.
+* *As above, and the actor portrait*: additionally the portrait of the actor.
+
+The last choice is kept per user and preselected the next time. The setting *Ask what a token picture changes* hides the row when you do not want the question: the last choice then applies silently. The shortcuts never ask, they always use the last choice. Only what you own is changed (GMs everything). The size of the tokens stays the same.
+
+*Cut to a square* (a box in the dialog, shown for pictures that are not square) saves the centered square of the picture, which is what round and square token frames show anyway. The setting *Cut token pictures to a square* ticks the box in advance and applies to the shortcuts. It is off by default because the edges of the picture are lost. PNG, JPEG and WebP are cut, animated pictures, GIF, AVIF and SVG stay as they are, as do videos. The cut happens before the upload and before shrinking and WebP conversion.
 
 The portrait target changes the portrait of the actors of the selected tokens. Without a selected token it changes the portrait of the character assigned to you.
 
@@ -234,6 +242,7 @@ Every user can configure on the module settings page:
 * whether clipboard paste triggers the module
 * whether drag and drop triggers the module
 * whether the printed grid of a map is searched when it becomes a new scene
+* whether the import window asks what a token picture changes, and whether token pictures are cut to a square
 * whether the drop target is shown while dragging
 * the default target
 * whether the last successful target is reused automatically (for single images and for batches separately)
@@ -270,7 +279,7 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * on how many of the last 30 days the module was used
 * how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
-* how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map and how many get a hexagon grid
+* how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map, how many keep the found grid unchanged and how many get a hexagon grid
 * the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP*, *Show the drop target while dragging* and *Look for the grid on maps* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 

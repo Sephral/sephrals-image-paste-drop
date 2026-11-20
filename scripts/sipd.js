@@ -1,4 +1,5 @@
 import {
+  cropImageToSquare,
   describeOptimizationPlan,
   getImageOptimizationPlan,
   hasOptimizationOptions,
@@ -25,7 +26,9 @@ import {findGrid, fitGridAt} from "./grid-fit.js";
 import {bindMeasure, describeGrid, drawGridOverlay, guessCellCount, isGridSource} from "./grid-tools.js";
 import {sha256Hex} from "./sha256.js";
 import {
+  TOKEN_SCOPES,
   VIDEO_FILE_EXTENSIONS,
+  normalizeTokenScope,
   batchItemName,
   buildChatImageContent,
   clampPointToRect,
@@ -60,6 +63,9 @@ const STORAGE_ROOT = "clipboard-images";
 const ENABLE_PASTE_SETTING = "enablePasteImport";
 const ENABLE_DROP_SETTING = "enableDropImport";
 const AUTO_GRID_SETTING = "autoGrid";
+const ASK_TOKEN_SCOPE_SETTING = "askTokenScope";
+const LAST_TOKEN_SCOPE_SETTING = "lastTokenScope";
+const SQUARE_TOKEN_CROP_SETTING = "squareTokenCrop";
 const DEFAULT_ACTION_SETTING = "defaultAction";
 const REMEMBER_LAST_ACTION_SETTING = "rememberLastAction";
 const LAST_ACTION_SETTING = "lastAction";
@@ -399,6 +405,31 @@ Hooks.once("init", () => {
     default: true
   });
 
+  game.settings.register(MODULE_ID, ASK_TOKEN_SCOPE_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.AskTokenScope.Label"),
+    hint: localize("SIPD.Settings.AskTokenScope.Hint"),
+    type: Boolean,
+    default: true
+  });
+
+  game.settings.register(MODULE_ID, LAST_TOKEN_SCOPE_SETTING, {
+    scope: "client",
+    config: false,
+    type: String,
+    default: TOKEN_SCOPES.TOKEN
+  });
+
+  game.settings.register(MODULE_ID, SQUARE_TOKEN_CROP_SETTING, {
+    scope: "client",
+    config: true,
+    name: localize("SIPD.Settings.SquareTokenCrop.Label"),
+    hint: localize("SIPD.Settings.SquareTokenCrop.Hint"),
+    type: Boolean,
+    default: false
+  });
+
   game.settings.register(MODULE_ID, DROP_INDICATOR_SETTING, {
     scope: "client",
     config: true,
@@ -607,7 +638,7 @@ Hooks.once("init", () => {
 
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
-      "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridFitted", "hexScene"],
+      "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridKept", "gridFitted", "hexScene"],
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING, AUTO_GRID_SETTING]
   });
 
@@ -1055,8 +1086,12 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
 
     // Shrinking and WebP only apply to uploads, unless the dialog switched them off. The file name hashes the final bytes.
     const needsUpload = requiresPersistentPath(decision.action, decision.shareToPlayers);
+    // A token picture may be cut to its centered square first
+    const cropped = (needsUpload && decision.squareCrop && !video) ? await cropImageToSquare(preparedFile, dimensions) : null;
+    const source = cropped?.changed ? cropped.file : preparedFile;
+    const sourceSize = cropped?.changed ? {width: cropped.width, height: cropped.height} : dimensions;
     const upload = needsUpload
-      ? await prepareUploadFile(preparedFile, dimensions, {optimize: decision.optimize})
+      ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize})
       : {file: preparedFile, ...dimensions};
     const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, upload.file);
     const path = needsUpload
@@ -1066,6 +1101,7 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     if ( path === objectUrl ) releaseObjectUrl = false;
 
     const layout = fitSceneToGrid(decision.grid, dimensions, upload);
+    const gridKept = (decision.action === ACTIONS.SCENE_BACKGROUND) && (decision.gridSource === "found") && Boolean(decision.grid);
     await executeAction({
       ...getDecisionOptions(decision),
       path,
@@ -1077,6 +1113,7 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       dropPoint,
       context
     });
+    if ( gridKept ) countFeature(MODULE_ID, "gridKept");
   } finally {
     if ( releaseObjectUrl ) URL.revokeObjectURL(objectUrl);
   }
@@ -1091,6 +1128,7 @@ function getDecisionOptions(decision) {
     navigation: decision.navigation,
     recipients: decision.recipients ?? [],
     prototypeToken: Boolean(decision.prototypeToken),
+    tokenScope: decision.tokenScope ?? null,
     chatMode: decision.chatMode ?? CHAT_MODES.CURRENT,
     grid: decision.grid ?? null
   };
@@ -1109,6 +1147,30 @@ async function resolveImportDecision({quickTarget=null, ...prompt}) {
 // The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
 // is not possible right now, for example a token target without a selected token.
 // The grid choice of a grid from the file name or from the picture
+function getLastTokenScope() {
+  try {
+    return normalizeTokenScope(game.settings.get(MODULE_ID, LAST_TOKEN_SCOPE_SETTING));
+  } catch (_error) {
+    return TOKEN_SCOPES.TOKEN;
+  }
+}
+
+function getSquareTokenCropDefault() {
+  try {
+    return Boolean(game.settings.get(MODULE_ID, SQUARE_TOKEN_CROP_SETTING));
+  } catch (_error) {
+    return false;
+  }
+}
+
+function askForTokenScope() {
+  try {
+    return game.settings.get(MODULE_ID, ASK_TOKEN_SCOPE_SETTING) !== false;
+  } catch (_error) {
+    return true;
+  }
+}
+
 function gridChoiceFromSource(grid) {
   if ( grid.source === "found" ) return {type: grid.type, size: grid.size, exact: grid.exact, anchor: grid.anchor};
   return {type: getDefaultGridType(), size: grid.size, columns: grid.columns};
@@ -1128,10 +1190,12 @@ function buildQuickDecision(quickTarget, {remoteUrl=false, video=false, grid=nul
     activateScene: defaults.activateScene,
     navigation: defaults.navigation,
     recipients: [],
-    prototypeToken: true,
+    tokenScope: getLastTokenScope(),
+    squareCrop: getSquareTokenCropDefault(),
     chatMode: CHAT_MODES.CURRENT,
     optimize: true,
-    grid: grid ? gridChoiceFromSource(grid) : null
+    grid: grid ? gridChoiceFromSource(grid) : null,
+    gridSource: grid?.source === "found" ? "found" : null
   }, {remoteUrl, video, context});
 }
 
@@ -1450,6 +1514,10 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
   }), {remoteUrl, video, context});
   if ( !decision ) return null;
 
+  if ( (decision.action === ACTIONS.TOKEN_IMAGE) && (decision.tokenScope !== getLastTokenScope()) ) {
+    await game.settings.set(MODULE_ID, LAST_TOKEN_SCOPE_SETTING, decision.tokenScope);
+  }
+
   // A target picked because of where the image was dropped is not the one to start with next time
   if ( game.settings.get(MODULE_ID, REMEMBER_LAST_ACTION_SETTING) && !actionTargetsContext(decision.action, context) ) {
     await game.settings.set(MODULE_ID, LAST_ACTION_SETTING, decision.action);
@@ -1471,6 +1539,10 @@ function normalizeActionDecision(decision, {remoteUrl=false, video=false, contex
   const behavior = getActionBehavior(action);
   const shareToPlayers = behavior.supportsShareToPlayers && canUserShareImages() && Boolean(decision.shareToPlayers);
   const sharing = shareToPlayers || behavior.supportsRecipients;
+  // An older caller that only knows the prototype checkbox means the actor
+  const tokenScope = behavior.supportsPrototypeToken
+    ? normalizeTokenScope(decision.tokenScope, decision.prototypeToken ? TOKEN_SCOPES.ACTOR : TOKEN_SCOPES.TOKEN)
+    : TOKEN_SCOPES.TOKEN;
 
   return {
     name: String(decision.name ?? "").trim() || defaultDocumentName(),
@@ -1480,7 +1552,10 @@ function normalizeActionDecision(decision, {remoteUrl=false, video=false, contex
     activateScene: behavior.supportsActivateScene && Boolean(decision.activateScene),
     navigation: behavior.supportsNavigation && Boolean(decision.navigation),
     recipients: sharing ? normalizeRecipientIds(decision.recipients, getAllUserIds()) : [],
-    prototypeToken: behavior.supportsPrototypeToken && Boolean(decision.prototypeToken),
+    prototypeToken: behavior.supportsPrototypeToken && (tokenScope !== TOKEN_SCOPES.TOKEN),
+    tokenScope,
+    squareCrop: behavior.supportsPrototypeToken && !video && Boolean(decision.squareCrop),
+    gridSource: behavior.supportsGrid ? (decision.gridSource ?? null) : null,
     chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
     optimize: readOptimizeChoice(decision),
     grid: behavior.supportsGrid ? normalizeGridChoice(decision.grid, {types: getGridTypeValues(), defaultType: getDefaultGridType()}) : null
@@ -1819,15 +1894,10 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 </select>
               </div>
             </div>
+            ${tokenScopeMarkup(defaults.tokenScope)}
             ${recipientsMarkup(getShareRecipientChoices())}
             <div class="form-group stacked sipd-choice-stack">
-              <label class="checkbox sipd-choice-row" data-option-row="prototypeToken">
-                <input type="checkbox" name="prototypeToken" checked>
-                <span>
-                  <strong>${localize("SIPD.Dialog.PrototypeToken")}</strong>
-                  <small>${localize("SIPD.Dialog.PrototypeTokenHint")}</small>
-                </span>
-              </label>
+              ${squareCropMarkup({width, height, video, checked: defaults.squareCrop})}
               <label class="checkbox sipd-choice-row" data-option-row="shareToPlayers">
                 <input type="checkbox" name="shareToPlayers"${defaults.shareToPlayers ? " checked" : ""}>
                 <span>
@@ -1881,10 +1951,12 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           activateScene: button.form.elements.activateScene.checked,
           navigation: button.form.elements.navigation.checked,
           recipients: readCheckedRecipients(button.form),
-          prototypeToken: Boolean(button.form.elements.prototypeToken?.checked),
+          tokenScope: button.form.elements.tokenScope?.value ?? TOKEN_SCOPES.TOKEN,
+          squareCrop: Boolean(button.form.elements.squareCrop?.checked),
           chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
           optimize: readOptimizeCheckbox(button.form),
-          grid: readGridChoice(button.form)
+          grid: readGridChoice(button.form),
+          gridSource: button.form.elements.gridSource?.value ?? null
         })
       },
       {
@@ -1893,6 +1965,36 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
       }
     ]
   });
+}
+
+// What a token picture changes. The last choice is preselected, the setting can hide the question.
+function tokenScopeMarkup(selected=TOKEN_SCOPES.TOKEN) {
+  const options = [
+    [TOKEN_SCOPES.TOKEN, "SIPD.Dialog.TokenScopeToken"],
+    [TOKEN_SCOPES.ACTOR, "SIPD.Dialog.TokenScopeActor"],
+    [TOKEN_SCOPES.PORTRAIT, "SIPD.Dialog.TokenScopePortrait"]
+  ].map(([value, key]) => `<option value="${value}"${value === selected ? " selected" : ""}>${escapeHtml(localize(key))}</option>`).join("");
+  return `
+            <div class="form-group" data-option-row="prototypeToken">
+              <label>${localize("SIPD.Dialog.TokenScope")}</label>
+              <div class="form-fields sipd-field-stack">
+                <select name="tokenScope">${options}</select>
+                <small class="sipd-field-hint">${localize("SIPD.Dialog.TokenScopeHint")}</small>
+              </div>
+            </div>`;
+}
+
+// Only for a picture that is not square and not a video
+function squareCropMarkup({width, height, video=false, checked=false}) {
+  if ( video || !(width > 0) || (width === height) ) return "";
+  return `
+              <label class="checkbox sipd-choice-row" data-option-row="squareCrop">
+                <input type="checkbox" name="squareCrop"${checked ? " checked" : ""}>
+                <span>
+                  <strong>${localize("SIPD.Dialog.SquareCrop")}</strong>
+                  <small>${localize("SIPD.Dialog.SquareCropHint")}</small>
+                </span>
+              </label>`;
 }
 
 // Checkbox for uploads that get shrunk or converted. Checked by default, unchecked uploads the original file.
@@ -2149,8 +2251,11 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
     refresh();
   };
   // A search that finds nothing keeps what was typed in. Only the default turns into the "none" note.
+  const toolsRow = form.querySelector?.("[data-grid-tools]");
   const reportMissing = reason => {
     const status = (reason === "unreadable") ? "unreadable" : "none";
+    // No grid found: the Measure button steps forward right there
+    toolsRow?.classList?.add("is-missing");
     if ( NO_GRID.includes(gridSource.value) ) gridSource.value = status;
     else notice = status;
     refresh();
@@ -2165,8 +2270,10 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
     if ( !form.isConnected ) return;
     // The user typed a grid while the search ran, it stays
     if ( wasEmpty && (gridSource.value !== "searching") && !force ) return;
-    if ( result.found ) apply(result.grid, "found");
-    else {
+    if ( result.found ) {
+      toolsRow?.classList?.remove("is-missing");
+      apply(result.grid, "found");
+    } else {
       if ( gridSource.value === "searching" ) gridSource.value = "default";
       reportMissing(result.reason);
     }
@@ -2213,6 +2320,7 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
     // The picture itself puts the grid exactly where its lines are, the drag only has to be near
     const fitted = gridTools ? await gridTools.fit({type, size: grid.size}) : null;
     if ( fitted?.found && (gridFamily(fitted.grid.type, types) === gridFamily(type, types)) ) result = {...fitted.grid, type: fitted.grid.type};
+    toolsRow?.classList?.remove("is-missing");
     apply(result, "measured");
     countFeature(MODULE_ID, "gridMeasured");
   });
@@ -2222,7 +2330,17 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
   }
 
   refresh();
-  if ( gridTools?.auto && (gridSource.value === "default") ) void search();
+  // The search is for new scenes only. Token pictures, tiles and the rest never start it.
+  const actionField = elements.action;
+  const forScene = () => !actionField || getActionBehavior(actionField.value).supportsGrid;
+  let searched = false;
+  const searchForScene = () => {
+    if ( searched || !gridTools?.auto || !forScene() || (gridSource.value !== "default") ) return;
+    searched = true;
+    void search();
+  };
+  actionField?.addEventListener?.("change", searchForScene);
+  searchForScene();
 }
 
 // No recipient checked means everyone
@@ -2382,7 +2500,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
   const activateSceneField = form.elements.activateScene;
   const navigationField = form.elements.navigation;
   const uploadDirectoryField = form.elements.uploadDirectory;
-  const prototypeTokenField = form.elements.prototypeToken;
+  const tokenScopeField = form.elements.tokenScope;
+  const squareCropField = form.elements.squareCrop;
   const chatModeField = form.elements.chatMode;
   const optimizeRow = form.querySelector('[data-option-row="optimize"]');
   const optionRows = {
@@ -2392,6 +2511,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     uploadDirectory: form.querySelector('[data-option-row="uploadDirectory"]'),
     recipients: form.querySelector('[data-option-row="recipients"]'),
     prototypeToken: form.querySelector('[data-option-row="prototypeToken"]'),
+    squareCrop: form.querySelector('[data-option-row="squareCrop"]'),
     chatMode: form.querySelector('[data-option-row="chatMode"]'),
     grid: form.querySelector('[data-option-row="grid"]')
   };
@@ -2411,7 +2531,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     shareToPlayersField.disabled = !showShare;
     uploadDirectoryField.disabled = !showUploadDirectory;
 
-    if ( prototypeTokenField ) prototypeTokenField.disabled = !behavior.supportsPrototypeToken;
+    if ( tokenScopeField ) tokenScopeField.disabled = !behavior.supportsPrototypeToken;
+    if ( squareCropField ) squareCropField.disabled = !behavior.supportsPrototypeToken;
     if ( chatModeField ) chatModeField.disabled = !behavior.supportsChatMode;
 
     // Recipients apply to the share target and to the "also show" option once it is checked
@@ -2421,7 +2542,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     setRowVisible(optionRows.navigation, behavior.supportsNavigation);
     setRowVisible(optionRows.uploadDirectory, showUploadDirectory);
     setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
-    setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken);
+    setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken && askForTokenScope());
+    setRowVisible(optionRows.squareCrop, behavior.supportsPrototypeToken);
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
     setRowVisible(optionRows.grid, behavior.supportsGrid);
     setRowVisible(optimizeRow, requiresPersistentPath(actionField.value, sharing));
@@ -2467,6 +2589,8 @@ function getDialogDefaults({remoteUrl=false, video=false, context=null}={}) {
     navigation: game.settings.get(MODULE_ID, DEFAULT_NAVIGATION_SETTING),
     uploadDirectory: normalizeUploadDirectory(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
     uploadDirectoryChoices: getUploadDirectoryChoices(game.settings.get(MODULE_ID, DEFAULT_UPLOAD_DIRECTORY_SETTING)),
+    tokenScope: getLastTokenScope(),
+    squareCrop: getSquareTokenCropDefault(),
     uiTheme: getUITheme()
   };
 }
@@ -3314,7 +3438,10 @@ function getEligibleActors(context=null) {
   return Array.from(actors.values());
 }
 
-async function updateTokenImages({path, prototypeToken=false, context=null}) {
+// The token scope decides what else changes with the tokens: "actor" the prototype token of their actors and every token
+// of those actors on the scene, "portrait" the same and the actor portrait. Without a scope the old checkbox applies:
+// the prototype of linked tokens.
+async function updateTokenImages({path, prototypeToken=false, tokenScope=null, context=null}) {
   const tokens = getEligibleTokens(context);
   if ( !tokens.length ) {
     throw new Error(localize("SIPD.Error.NoToken"));
@@ -3322,11 +3449,37 @@ async function updateTokenImages({path, prototypeToken=false, context=null}) {
 
   // A dropped-onto token stays on its scene even when the GM looks at another one meanwhile
   const scene = tokens[0].document.parent ?? canvas.scene;
+  const scope = tokenScope ? normalizeTokenScope(tokenScope) : null;
+  const ids = new Set(tokens.map(token => token.document.id));
+
+  if ( scope && (scope !== TOKEN_SCOPES.TOKEN) ) {
+    // The base actors, also behind unlinked tokens. Only what the user may change.
+    const isGM = Boolean(game.user?.isGM);
+    const actors = new Map();
+    for ( const token of tokens ) {
+      const actorId = token.document.actorId ?? token.actor?.id;
+      const actor = (actorId && game.actors?.get?.(actorId)) || token.actor || null;
+      if ( actor && (isGM || actor.isOwner) ) actors.set(actor.id, actor);
+    }
+    for ( const token of scene.tokens ?? [] ) {
+      if ( actors.has(token.actorId) && (isGM || token.isOwner) ) ids.add(token.id);
+    }
+    const updates = Array.from(ids, id => ({_id: id, "texture.src": path}));
+    await scene.updateEmbeddedDocuments("Token", updates);
+    for ( const actor of actors.values() ) {
+      const change = {"prototypeToken.texture.src": path};
+      if ( scope === TOKEN_SCOPES.PORTRAIT ) change.img = path;
+      await actor.update(change);
+    }
+    ui.notifications.info(localize("SIPD.Notification.TokenUpdated", {count: updates.length}));
+    return tokens;
+  }
+
   const updates = tokens.map(token => ({_id: token.document.id, "texture.src": path}));
   await scene.updateEmbeddedDocuments("Token", updates);
 
   // Linked tokens share their actor, so the prototype keeps the new image for the next placement
-  if ( prototypeToken ) {
+  if ( prototypeToken && !scope ) {
     const actors = new Map();
     for ( const token of tokens ) {
       if ( token.document.actorLink && token.actor ) actors.set(token.actor.id, token.actor);
@@ -4033,6 +4186,12 @@ export const __test__ = {
   DEFAULT_ACTION_SETTING,
   REMEMBER_LAST_ACTION_SETTING,
   LAST_ACTION_SETTING,
+  ASK_TOKEN_SCOPE_SETTING,
+  LAST_TOKEN_SCOPE_SETTING,
+  SQUARE_TOKEN_CROP_SETTING,
+  tokenScopeMarkup,
+  squareCropMarkup,
+  askForTokenScope,
   AUTO_GRID_SETTING,
   DEFAULT_SHARE_SETTING,
   DEFAULT_ACTIVATE_SCENE_SETTING,

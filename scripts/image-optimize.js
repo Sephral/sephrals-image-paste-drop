@@ -235,8 +235,64 @@ async function optimizeImageFile(file, {width, height}, options={}) {
   };
 }
 
+// The centered square of a picture: where it starts and how long its side is. A square picture has nothing to cut.
+function squareCropRect(width, height) {
+  const w = Math.round(Number(width));
+  const h = Math.round(Number(height));
+  if ( !(w > 0) || !(h > 0) ) return null;
+  const size = Math.min(w, h);
+  return {x: Math.floor((w - size) / 2), y: Math.floor((h - size) / 2), size, changed: w !== h};
+}
+
+const CROPPABLE_TYPES = Object.freeze(["image/png", "image/jpeg", "image/webp"]);
+
+// Cuts a picture that is not square down to its centered square, for token pictures. Animated pictures and formats the
+// canvas would flatten (GIF, SVG, AVIF) stay as they are, like any failure.
+async function cropImageToSquare(file, {width, height}) {
+  const unchanged = {file, width, height, changed: false};
+  const rect = squareCropRect(width, height);
+  if ( !file || !rect?.changed || !CROPPABLE_TYPES.includes(file.type) ) return unchanged;
+  if ( isAnimatedImageData(await readImageHeader(file), file.type) ) return unchanged;
+
+  let bitmap;
+  let blob;
+  try {
+    bitmap = await createImageBitmap(file);
+    if ( typeof OffscreenCanvas === "function" ) {
+      const canvas = new OffscreenCanvas(rect.size, rect.size);
+      const context = canvas.getContext("2d");
+      context.imageSmoothingQuality = "high";
+      context.drawImage(bitmap, rect.x, rect.y, rect.size, rect.size, 0, 0, rect.size, rect.size);
+      blob = await canvas.convertToBlob({type: file.type, quality: 0.92});
+    } else {
+      const canvas = document.createElement("canvas");
+      canvas.width = rect.size;
+      canvas.height = rect.size;
+      const context = canvas.getContext("2d");
+      context.imageSmoothingQuality = "high";
+      context.drawImage(bitmap, rect.x, rect.y, rect.size, rect.size, 0, 0, rect.size, rect.size);
+      blob = await new Promise(resolve => canvas.toBlob(resolve, file.type, 0.92));
+    }
+  } catch (error) {
+    console.warn("sephrals-image-paste-drop | Square crop failed, the original file is used", error);
+    return unchanged;
+  } finally {
+    bitmap?.close?.();
+  }
+  if ( !blob?.size ) return unchanged;
+  const type = blob.type || file.type;
+  return {
+    file: new File([blob], replaceFileExtension(file.name, type), {type, lastModified: Date.now()}),
+    width: rect.size,
+    height: rect.size,
+    changed: true
+  };
+}
+
 export {
   PASSTHROUGH_TYPES,
+  squareCropRect,
+  cropImageToSquare,
   computeScaledSize,
   normalizeQuality,
   isAnimatedImageData,

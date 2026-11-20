@@ -201,3 +201,45 @@ test("optimizeImageFile re-encodes through a canvas and keeps the original when 
     console.warn = originalWarn;
   }
 });
+
+test("squareCropRect centers the square and leaves square pictures alone", () => {
+  assert.deepEqual(optimize.squareCropRect(800, 600), { x: 100, y: 0, size: 600, changed: true });
+  assert.deepEqual(optimize.squareCropRect(500, 901), { x: 0, y: 200, size: 500, changed: true });
+  assert.deepEqual(optimize.squareCropRect(512, 512), { x: 0, y: 0, size: 512, changed: false });
+  assert.equal(optimize.squareCropRect(0, 10), null);
+});
+
+test("cropImageToSquare cuts the center square and keeps the file when it cannot", async () => {
+  const draws = [];
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() { return { drawImage: (...args) => draws.push(args.slice(1)) }; }
+    async convertToBlob({ type }) { return new Blob([new Uint8Array(5)], { type }); }
+  };
+  try {
+    const file = new File([new Uint8Array(40)], "wide.png", { type: "image/png" });
+    const result = await optimize.cropImageToSquare(file, { width: 800, height: 600 });
+    assert.equal(result.changed, true);
+    assert.deepEqual([result.width, result.height], [600, 600]);
+    assert.equal(result.file.name, "wide.png");
+    assert.deepEqual(draws[0], [100, 0, 600, 600, 0, 0, 600, 600]);
+
+    assert.equal((await optimize.cropImageToSquare(file, { width: 600, height: 600 })).changed, false);
+    const gif = new File([new Uint8Array(40)], "a.gif", { type: "image/gif" });
+    assert.equal((await optimize.cropImageToSquare(gif, { width: 800, height: 600 })).file, gif);
+
+    globalThis.createImageBitmap = async () => { throw new Error("no decoder"); };
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      assert.equal((await optimize.cropImageToSquare(file, { width: 800, height: 600 })).file, file);
+    } finally {
+      console.warn = warn;
+    }
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
+});

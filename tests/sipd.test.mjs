@@ -92,8 +92,8 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 24 module settings and the hidden consent and state settings of the usage library
-  assert.equal(env.state.registerCalls.length, 26);
+  // 27 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 29);
   const indicator = env.state.registerCalls.find((entry) => entry.key === __test__.DROP_INDICATOR_SETTING);
   assert.equal(indicator.data.scope, "client");
   assert.equal(indicator.data.default, true);
@@ -379,6 +379,9 @@ test("user access, directory, and naming helpers normalize values and permission
     navigation: false,
     recipients: [],
     prototypeToken: false,
+    tokenScope: "token",
+    squareCrop: false,
+    gridSource: null,
     chatMode: "current",
     optimize: true,
     grid: null
@@ -462,7 +465,9 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     activateScene: false,
     navigation: true,
     recipients: [],
-    prototypeToken: false,
+    tokenScope: "token",
+    squareCrop: false,
+    gridSource: null,
     chatMode: "current",
     optimize: true,
     grid: null
@@ -1677,7 +1682,7 @@ test("the import dialog shows recipients, prototype and chat options only where 
   for ( const [key, row] of Object.entries(extraRows) ) dialog.form.setQuerySelector(`[data-option-row="${key}"]`, row);
   const note = new TestHTMLElement();
   dialog.form.setQuerySelector('[data-option-row="optimize"]', note);
-  dialog.form.elements.prototypeToken = { checked: true, disabled: false };
+  dialog.form.elements.tokenScope = { value: "token", disabled: false };
   dialog.form.elements.chatMode = { value: "current", disabled: false };
   const shareListeners = [];
   dialog.shareField.addEventListener = (_type, handler) => shareListeners.push(handler);
@@ -1693,7 +1698,7 @@ test("the import dialog shows recipients, prototype and chat options only where 
   dialog.actionField.value = ACTIONS.TOKEN_IMAGE;
   dialog.actionField.fire();
   assert.deepEqual(visible(), [false, true, false]);
-  assert.equal(dialog.form.elements.prototypeToken.disabled, false);
+  assert.equal(dialog.form.elements.tokenScope.disabled, false);
 
   dialog.actionField.value = ACTIONS.CHAT_IMAGE;
   dialog.actionField.fire();
@@ -2822,4 +2827,103 @@ test("the grid search is registered as a client setting", async () => {
   assert.equal(setting.data.scope, "client");
   assert.equal(setting.data.default, true);
   assert.equal(setting.data.config, true);
+});
+
+test("the token scope decides what else gets a token picture", async () => {
+  const { ACTIONS } = __test__;
+  const scene = createTokenScene();
+  const hero = createActor("hero");
+  const other = createActor("other", { owner: false });
+  scene.tokens = [
+    { id: "t1", actorId: "hero", isOwner: true },
+    { id: "t3", actorId: "hero", isOwner: true },
+    { id: "t4", actorId: "other", isOwner: false }
+  ];
+  env.game.actors = { get: (id) => ({ hero, other })[id] };
+  env.canvas.tokens = { controlled: [{ document: { id: "t1", actorId: "hero", isOwner: true, actorLink: false }, actor: { id: "synthetic" } }] };
+  try {
+    // Only this token: nothing else changes
+    await __test__.updateTokenImages({ path: "a.webp", tokenScope: "token" });
+    assert.deepEqual(scene.tokenUpdates[0].updates, [{ _id: "t1", "texture.src": "a.webp" }]);
+    assert.deepEqual(hero.updates, []);
+
+    // The actor: prototype token and every token of the actor on the scene, also unlinked ones
+    await __test__.updateTokenImages({ path: "b.webp", tokenScope: "actor" });
+    assert.deepEqual(scene.tokenUpdates[1].updates.map((entry) => entry._id).sort(), ["t1", "t3"]);
+    assert.deepEqual(hero.updates, [{ "prototypeToken.texture.src": "b.webp" }]);
+
+    // With the portrait
+    hero.updates = [];
+    await __test__.updateTokenImages({ path: "c.webp", tokenScope: "portrait" });
+    assert.deepEqual(hero.updates, [{ "prototypeToken.texture.src": "c.webp", img: "c.webp" }]);
+
+    // A player only changes what is theirs
+    enablePlayerTargets(ACTIONS.TOKEN_IMAGE);
+    env.canvas.tokens.controlled = [{ document: { id: "t4", actorId: "other", isOwner: true }, actor: other }];
+    other.updates = [];
+    await __test__.updateTokenImages({ path: "d.webp", tokenScope: "portrait" });
+    assert.deepEqual(other.updates, []);
+    assert.deepEqual(scene.tokenUpdates.at(-1).updates, [{ _id: "t4", "texture.src": "d.webp" }]);
+
+    // The decision carries the scope, the old checkbox means the actor
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, tokenScope: "portrait" }).tokenScope, "portrait");
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, tokenScope: "bogus" }).tokenScope, "token");
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, prototypeToken: true }).tokenScope, "actor");
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, tokenScope: "actor" }).prototypeToken, true);
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, squareCrop: true }, { video: true }).squareCrop, false);
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.TOKEN_IMAGE, squareCrop: true }).squareCrop, true);
+    assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.CHAT_IMAGE, tokenScope: "actor", squareCrop: true }).squareCrop, false);
+  } finally {
+    delete env.canvas.tokens;
+    delete env.game.actors;
+  }
+});
+
+test("the last token scope and the square crop default reach the dialog", () => {
+  setSetting(__test__.LAST_TOKEN_SCOPE_SETTING, "portrait");
+  setSetting(__test__.SQUARE_TOKEN_CROP_SETTING, true);
+  const defaults = __test__.getDialogDefaults();
+  assert.equal(defaults.tokenScope, "portrait");
+  assert.equal(defaults.squareCrop, true);
+  assert.match(__test__.tokenScopeMarkup(defaults.tokenScope), /<option value="portrait" selected>/);
+  assert.match(__test__.squareCropMarkup({ width: 800, height: 600, checked: true }), /name="squareCrop" checked/);
+  assert.equal(__test__.squareCropMarkup({ width: 600, height: 600 }), "");
+  assert.equal(__test__.squareCropMarkup({ width: 800, height: 600, video: true }), "");
+  setSetting(__test__.ASK_TOKEN_SCOPE_SETTING, false);
+  assert.equal(__test__.askForTokenScope(), false);
+  setSetting(__test__.ASK_TOKEN_SCOPE_SETTING, true);
+  assert.equal(__test__.askForTokenScope(), true);
+});
+
+test("the grid search only runs while the target is a new scene", async () => {
+  const { ACTIONS } = __test__;
+  const grid = createGridForm({ source: "default" });
+  for ( const name of ["gridExact", "gridAnchorX", "gridAnchorY", "gridLead"] ) grid.form.elements[name] = Object.assign(new TestHTMLElement(), { value: "" });
+  grid.form.isConnected = true;
+  const listeners = [];
+  grid.form.elements.action = { value: ACTIONS.TOKEN_IMAGE, addEventListener: (_type, handler) => listeners.push(handler) };
+  let searches = 0;
+  const answer = Promise.resolve({ found: false, reason: "noGrid" });
+  const gridTools = { auto: true, search: () => { searches += 1; return answer; }, find: () => answer };
+  const tools = new TestHTMLElement();
+  tools.classList = { added: [], add(name) { this.added.push(name); }, remove() {} };
+  grid.form.setQuerySelector("[data-grid-tools]", tools);
+
+  __test__.bindGridFields(grid.form, { width: 4200, height: 2800, gridTools });
+  assert.equal(searches, 0);
+  assert.equal(grid.form.elements.gridSource.value, "default");
+
+  // Switching to the scene target starts it once, going back and forth does not repeat it
+  grid.form.elements.action.value = ACTIONS.SCENE_BACKGROUND;
+  listeners[0]();
+  assert.equal(searches, 1);
+  await answer;
+  await Promise.resolve();
+  assert.equal(grid.form.elements.gridSource.value, "none");
+  assert.deepEqual(tools.classList.added, ["is-missing"]);
+  grid.form.elements.action.value = ACTIONS.TOKEN_IMAGE;
+  listeners[0]();
+  grid.form.elements.action.value = ACTIONS.SCENE_BACKGROUND;
+  listeners[0]();
+  assert.equal(searches, 1);
 });
