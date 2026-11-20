@@ -17,8 +17,9 @@
 * **The grid fits the map:** square or hexagons, either way up. The grid printed on the map is found for you and Foundry's grid lies right on it. Nothing found? Drag across a few cells to measure it. A map named `Tavern 30x20` works too.
 * **Animated maps too:** drop a WebM or MP4 video and it plays as scene background, tile, token or handout.
 * **One key and done:** Alt+V sends the copied image to your usual target, Alt+P shows it to your players at once.
-* **No file juggling:** the image is uploaded and filed away for you, never stored twice. Huge images can be shrunk and saved as WebP.
+* **No file juggling:** the image is uploaded and filed away for you, never stored twice. Huge images can be shrunk and saved as WebP, and the dialog shows how small the file will be.
 * **Image links too:** copy an image address in your browser and paste it.
+* **Token pictures, made ready:** drop a plain background, cut to a square, add one of 14 drawn frames in the owner's color or your own, and see it live. Choose whether the token, the prototype or the portrait too gets it, and bring a replaced picture back.
 * **Players can join in:** let players show images or give their own token a new look, with the permissions you choose.
 * **Remembers your routine:** set a default target or reuse the last one, so the next image takes a single click.
 
