@@ -233,5 +233,17 @@
   "SIPD.Grid.Measured": "Aus deiner Messung übernommen. Prüf es in der Vorschau.",
   "SIPD.Grid.NotFound": "Auf dieser Karte ist kein aufgedrucktes Raster zu erkennen. Trag die Größe eines Feldes ein oder miss sie mit Ausmessen: einfach über ein paar Felder ziehen.",
   "SIPD.Grid.Unreadable": "Das Bild ließ sich für die Rastersuche nicht lesen. Trag die Größe eines Feldes von Hand ein.",
-  "SIPD.SelfTest.GridFit": "Foundry legt sein Raster anders an, als die Rasteranpassung erwartet, oder dieser Browser kann die Pixel eines Bildes nicht lesen. Ein gefundenes Raster kann ein Stück verschoben sitzen."
+  "SIPD.SelfTest.GridFit": "Foundry legt sein Raster anders an, als die Rasteranpassung erwartet, oder dieser Browser kann die Pixel eines Bildes nicht lesen. Ein gefundenes Raster kann ein Stück verschoben sitzen.",
+  "SIPD.Dialog.Webp": "Als WebP hochladen",
+  "SIPD.Dialog.WebpSizes": "{original}, als WebP etwa {webp}",
+  "SIPD.Dialog.WebpCalculating": "{original}, die Größe als WebP wird berechnet",
+  "SIPD.Dialog.WebpUnknown": "{original}, die Größe als WebP ließ sich hier nicht berechnen",
+  "SIPD.Undo.Link": "Rückgängig",
+  "SIPD.Undo.Previous": "Voriges Bild",
+  "SIPD.Undo.Restored": "Voriges Bild wiederhergestellt ({count}).",
+  "SIPD.Undo.Failed": "{count} ließen sich nicht zurückholen. Das Dokument ist vielleicht gelöscht oder gesperrt.",
+  "SIPD.Undo.Nothing": "In dieser Sitzung gibt es kein ersetztes Bild zum Zurückholen.",
+  "SIPD.Keybindings.PreviousPicture.Name": "Voriges Bild zurückholen",
+  "SIPD.Keybindings.PreviousPicture.Hint": "Macht den letzten Bildwechsel dieser Sitzung rückgängig (Token, Tile, Porträt oder Gegenstand). Standardmäßig ist keine Taste belegt.",
+  "SIPD.Hint.First": "Füge ein Bild mit {key} ein oder zieh es auf die Karte, dann entsteht eine Szene, ein Tile oder ein Token."
 }

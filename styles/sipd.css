@@ -987,3 +987,11 @@
 .sipd-import-dialog.is-measuring .sipd-panel--preview .sipd-dialog__preview img {
   max-height: 26rem;
 }
+
+/* Undo link in the success notification */
+.notification .sipd-undo-link {
+  margin-left: 0.4em;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}

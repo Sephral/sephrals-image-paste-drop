@@ -92,8 +92,8 @@ test.after(() => {
 
 test("registers all settings on init and event listeners on ready", async () => {
   await env.hooks.trigger("init");
-  // 27 module settings and the hidden consent and state settings of the usage library
-  assert.equal(env.state.registerCalls.length, 29);
+  // 28 module settings and the hidden consent and state settings of the usage library
+  assert.equal(env.state.registerCalls.length, 30);
   const indicator = env.state.registerCalls.find((entry) => entry.key === __test__.DROP_INDICATOR_SETTING);
   assert.equal(indicator.data.scope, "client");
   assert.equal(indicator.data.default, true);
@@ -232,7 +232,7 @@ test("paste, dragover, and drop handlers cover gatekeeping, success, and error p
 
   await __test__.onPaste(event);
   assert.equal(event.prevented, true);
-  assert.deepEqual(env.state.settingWrites.map((entry) => entry.key), [__test__.LAST_ACTION_SETTING]);
+  assert.deepEqual(env.state.settingWrites.map((entry) => entry.key), [__test__.LAST_ACTION_SETTING, __test__.FIRST_HINT_SETTING]);
 
   env.reset();
   env.state.imageBehavior.error = true;
@@ -384,6 +384,8 @@ test("user access, directory, and naming helpers normalize values and permission
     gridSource: null,
     chatMode: "current",
     optimize: true,
+    webp: null,
+    gridFoundBefore: false,
     grid: null
   });
 
@@ -470,6 +472,8 @@ test("readImageDimensions and promptForAction cover dialog defaults, markup, and
     gridSource: null,
     chatMode: "current",
     optimize: true,
+    webp: null,
+    gridFoundBefore: false,
     grid: null
   });
   assert.match(env.state.lastDialogOptions.content, /sipd-shell/);
@@ -1744,7 +1748,9 @@ test("uploads are shrunk and converted to WebP when the settings ask for it, GIF
     assert.deepEqual(__test__.getImageOptimizationOptions(), { maxSize: 256, webp: true, quality: 80 });
     await __test__.handleImportedImage(createImageFile("Big.png", "image/png", "a png image"));
     assert.match(env.state.lastDialogOptions.content, /name="optimize" checked/);
-    assert.match(env.state.lastDialogOptions.content, /SIPD\.Dialog\.OptimizeScaleFormat/);
+    // The shrinking and the WebP conversion have a checkbox each, the WebP one starts checked by the setting
+    assert.match(env.state.lastDialogOptions.content, /SIPD\.Dialog\.OptimizeScale"|SIPD\.Dialog\.OptimizeScale</);
+    assert.match(env.state.lastDialogOptions.content, /name="webp" checked/);
     assert.deepEqual(encoded, [{ width: 256, height: 160 }, { type: "image/webp", quality: 0.8 }]);
     const uploaded = env.state.uploadCalls[0].file;
     assert.equal(uploaded.type, "image/webp");
@@ -2009,7 +2015,8 @@ test("keyboard shortcuts insert to the preselected target and show the image, bo
     await env.hooks.trigger("init");
     assert.deepEqual(calls.map((call) => [call.namespace, call.action, call.data.editable]), [
       ["sephrals-image-paste-drop", "quickInsert", [{ key: "KeyV", modifiers: ["Alt"] }]],
-      ["sephrals-image-paste-drop", "quickShare", [{ key: "KeyP", modifiers: ["Alt"] }]]
+      ["sephrals-image-paste-drop", "quickShare", [{ key: "KeyP", modifiers: ["Alt"] }]],
+      ["sephrals-image-paste-drop", "previousPicture", []]
     ]);
     assert.equal(calls[0].data.name, "SIPD.Keybindings.QuickInsert.Name");
 
@@ -2926,4 +2933,162 @@ test("the grid search only runs while the target is a new scene", async () => {
   grid.form.elements.action.value = ACTIONS.SCENE_BACKGROUND;
   listeners[0]();
   assert.equal(searches, 1);
+});
+
+function createPictureDoc(uuid, source) {
+  const document = {
+    uuid,
+    _source: source,
+    updates: [],
+    async update(data) {
+      this.updates.push(data);
+    }
+  };
+  return document;
+}
+
+test("a token picture can be put back: token, prototype and portrait exactly as they were", async () => {
+  const scene = createTokenScene();
+  const token = createPictureDoc("Scene.s.Token.t1", { texture: { src: "old-token.webp" } });
+  token.id = "t1";
+  scene.tokens = { get: (id) => (id === "t1" ? token : null), [Symbol.iterator]: function* () {} };
+  const hero = Object.assign(createActor("hero"), { _source: { img: "old-portrait.webp", prototypeToken: { texture: { src: "old-proto.webp" } } } });
+  env.game.actors = { get: () => hero };
+  env.canvas.tokens = { controlled: [{ document: { id: "t1", uuid: token.uuid, actorId: "hero", isOwner: true, actorLink: true, parent: scene }, actor: hero }] };
+  const documents = { [token.uuid]: token, [hero.uuid]: hero };
+  const originalFromUuid = globalThis.fromUuid;
+  globalThis.fromUuid = async (uuid) => documents[uuid] ?? null;
+  __test__.UNDO_JOURNAL.clear();
+  try {
+    await __test__.updateTokenImages({ path: "new.webp", tokenScope: "portrait" });
+    const record = __test__.UNDO_JOURNAL.latestFor(hero.uuid);
+    assert.deepEqual(record.changes.map((change) => [change.uuid, change.path, change.before]), [
+      [token.uuid, "texture.src", "old-token.webp"],
+      [hero.uuid, "prototypeToken.texture.src", "old-proto.webp"],
+      [hero.uuid, "img", "old-portrait.webp"]
+    ]);
+    assert.equal(__test__.UNDO_JOURNAL.latestFor(token.uuid).id, record.id);
+
+    hero.updates = [];
+    assert.equal(await __test__.restorePictureOf(token.uuid), true);
+    assert.deepEqual(token.updates, [{ "texture.src": "old-token.webp" }]);
+    assert.deepEqual(hero.updates, [{ "prototypeToken.texture.src": "old-proto.webp", img: "old-portrait.webp" }]);
+    assert.equal(__test__.UNDO_JOURNAL.size, 0);
+    assert.equal(env.state.notifications.info.at(-1), "SIPD.Undo.Restored");
+    // Nothing left to put back
+    assert.equal(await __test__.restorePictureOf(token.uuid), false);
+  } finally {
+    globalThis.fromUuid = originalFromUuid;
+    delete env.canvas.tokens;
+    delete env.game.actors;
+  }
+});
+
+test("tile, portrait and item pictures are remembered and the last one comes back with the shortcut", async () => {
+  const { ACTIONS, CONTEXT_KINDS } = __test__;
+  const tile = createPictureDoc("Scene.s.Tile.a", { texture: { src: "old-tile.webp" } });
+  const item = createPictureDoc("Item.i", { img: "old-item.webp" });
+  item.name = "Sword";
+  const documents = { [tile.uuid]: tile, [item.uuid]: item };
+  const originalFromUuid = globalThis.fromUuid;
+  globalThis.fromUuid = async (uuid) => documents[uuid] ?? null;
+  __test__.UNDO_JOURNAL.clear();
+  try {
+    await __test__.replaceTileImage({ path: "new-tile.webp", context: { kind: "tile", document: tile, name: "Tile" } });
+    await __test__.updateItemImage({ path: "new-item.webp", context: { kind: "item", document: item } });
+    assert.equal(__test__.UNDO_JOURNAL.size, 2);
+    assert.equal(await __test__.restoreLastPicture(), true);
+    assert.deepEqual(item.updates.at(-1), { img: "old-item.webp" });
+    assert.equal(await __test__.restoreLastPicture(), true);
+    assert.deepEqual(tile.updates.at(-1), { "texture.src": "old-tile.webp" });
+    assert.equal(await __test__.restoreLastPicture(), false);
+    assert.equal(env.state.notifications.info.at(-1), "SIPD.Undo.Nothing");
+    void ACTIONS;
+    void CONTEXT_KINDS;
+  } finally {
+    globalThis.fromUuid = originalFromUuid;
+  }
+});
+
+test("a picture that cannot be put back is reported and a gone document does not stop the others", async () => {
+  const tile = createPictureDoc("Scene.s.Tile.a", { texture: { src: "old.webp" } });
+  const originalFromUuid = globalThis.fromUuid;
+  globalThis.fromUuid = async () => null;
+  __test__.UNDO_JOURNAL.clear();
+  try {
+    await __test__.replaceTileImage({ path: "new.webp", context: { kind: "tile", document: tile, name: "Tile" } });
+    assert.equal(await __test__.restorePictureOf(tile.uuid), false);
+    assert.equal(env.state.notifications.warn.at(-1), "SIPD.Undo.Failed");
+  } finally {
+    globalThis.fromUuid = originalFromUuid;
+  }
+});
+
+test("the first hint comes once for a GM who has not imported, never after an import", () => {
+  env.state.gm = true;
+  setSetting(__test__.FIRST_HINT_SETTING, "");
+  setSetting(__test__.WINDOW_STATE_SETTING, {});
+  env.state.settingWrites = [];
+  env.state.notifications.info.length = 0;
+  __test__.showFirstHint();
+  assert.equal(env.state.notifications.info.length, 1);
+  assert.equal(env.state.notifications.info[0], "SIPD.Hint.First");
+  assert.equal(env.state.settingWrites.at(-1).value, "shown");
+  // The next start: nothing
+  __test__.showFirstHint();
+  assert.equal(env.state.notifications.info.length, 1);
+
+  // An import dialog was used before: the hint never comes and the state is closed
+  setSetting(__test__.FIRST_HINT_SETTING, "");
+  setSetting(__test__.WINDOW_STATE_SETTING, { import: { width: 860 } });
+  __test__.showFirstHint();
+  assert.equal(env.state.notifications.info.length, 1);
+  assert.equal(env.state.settingWrites.at(-1).value, "used");
+
+  // The first import ends it
+  setSetting(__test__.FIRST_HINT_SETTING, "shown");
+  __test__.markFirstUse();
+  assert.equal(env.state.settingWrites.at(-1).value, "used");
+  // Players never see it
+  env.state.gm = false;
+  setSetting(__test__.FIRST_HINT_SETTING, "");
+  setSetting(__test__.WINDOW_STATE_SETTING, {});
+  __test__.showFirstHint();
+  assert.equal(env.state.notifications.info.length, 1);
+  env.state.gm = true;
+});
+
+test("the dialog shows the size as WebP next to the original and the checkbox follows the setting", async () => {
+  const originalBitmap = globalThis.createImageBitmap;
+  const originalCanvas = globalThis.OffscreenCanvas;
+  globalThis.createImageBitmap = async () => ({ close() {} });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage() {} };
+    }
+    async convertToBlob() {
+      return new Blob(["w".repeat(900)], { type: "image/webp" });
+    }
+  };
+  try {
+    setSetting(__test__.CONVERT_WEBP_SETTING, false);
+    setSetting(__test__.MAX_IMAGE_SIZE_SETTING, 0);
+    const png = new File(["p".repeat(8400)], "a.png", { type: "image/png" });
+    const tools = await __test__.createWebpTools(png, { width: 800, height: 600 });
+    assert.equal(tools.checked, false);
+    assert.equal(tools.size, 8400);
+    const markup = __test__.webpChoiceMarkup(tools);
+    assert.match(markup, /data-option-row="webp"/);
+    assert.doesNotMatch(markup, /name="webp" checked/);
+    assert.equal(await tools.estimate(), 900);
+    setSetting(__test__.CONVERT_WEBP_SETTING, true);
+    assert.match(__test__.webpChoiceMarkup(await __test__.createWebpTools(png, { width: 800, height: 600 })), /name="webp" checked/);
+    // Not for files that already are WebP, GIFs or videos
+    assert.equal(await __test__.createWebpTools(new File(["w"], "a.webp", { type: "image/webp" }), { width: 800, height: 600 }), null);
+    assert.equal(await __test__.createWebpTools(new File(["g"], "a.gif", { type: "image/gif" }), { width: 800, height: 600 }), null);
+    assert.equal(__test__.webpChoiceMarkup(null), "");
+  } finally {
+    globalThis.createImageBitmap = originalBitmap;
+    globalThis.OffscreenCanvas = originalCanvas;
+  }
 });

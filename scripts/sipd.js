@@ -5,6 +5,9 @@ import {
   hasOptimizationOptions,
   optimizationLabelVariant,
   optimizeImageFile,
+  canEstimateWebp,
+  estimateWebpSize,
+  formatFileSize,
   resolveOptimizationOptions,
   summarizeOptimizationPlans
 } from "./image-optimize.js";
@@ -25,6 +28,8 @@ import {
 import {findGrid, fitGridAt} from "./grid-fit.js";
 import {bindMeasure, describeGrid, drawGridOverlay, guessCellCount, isGridSource} from "./grid-tools.js";
 import {sha256Hex} from "./sha256.js";
+import {createUndoJournal, describeChange} from "./undo-journal.js";
+import {FIRST_HINT_STATES, shouldShowFirstHint, stateAfterImport} from "./first-hint.js";
 import {
   TOKEN_SCOPES,
   VIDEO_FILE_EXTENSIONS,
@@ -87,6 +92,7 @@ const WEBP_QUALITY_SETTING = "webpQuality";
 const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
 const DROP_INDICATOR_SETTING = "dropIndicator";
 const DROP_TIP_SETTING = "dropTipDismissed";
+const FIRST_HINT_SETTING = "firstHint";
 // The Foundry version the module was verified against (see the self-test).
 const TESTED_VERSIONS = Object.freeze({core: "14.370"});
 const MAX_IMAGE_SIZE_CHOICES = Object.freeze([0, 2048, 4096, 8192]);
@@ -607,6 +613,14 @@ Hooks.once("init", () => {
     default: 85
   });
 
+  // "", "shown" or "used": the quiet first hint for the GM comes once per world
+  game.settings.register(MODULE_ID, FIRST_HINT_SETTING, {
+    scope: "world",
+    config: false,
+    type: String,
+    default: ""
+  });
+
   game.settings.register(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, {
     scope: "client",
     config: false,
@@ -639,7 +653,8 @@ Hooks.once("init", () => {
 
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
-      "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridKept", "gridFitted", "hexScene"],
+      "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridKept", "gridChanged", "gridFitted", "hexScene",
+      "imageRestored", "webpChosen"],
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING, AUTO_GRID_SETTING]
   });
 
@@ -664,6 +679,16 @@ function registerQuickKeybindings() {
     editable: [{key: "KeyP", modifiers: ["Alt"]}],
     onDown: () => onQuickInsertKey(QUICK_TARGETS.SHARE)
   });
+  // Without a default key, it can be set under Configure Controls
+  keybindings.register(MODULE_ID, "previousPicture", {
+    name: localize("SIPD.Keybindings.PreviousPicture.Name"),
+    hint: localize("SIPD.Keybindings.PreviousPicture.Hint"),
+    editable: [],
+    onDown: () => {
+      void restoreLastPicture();
+      return true;
+    }
+  });
 }
 
 function getMaxImageSizeChoices() {
@@ -687,6 +712,9 @@ Hooks.once("ready", () => {
   const module = game.modules?.get?.(MODULE_ID);
   if ( module ) module.api = {
     runSelfTest,
+    // The previous picture of a token, tile, actor or item (its uuid), without an uuid the last replacement of this session
+    restorePreviousPicture: uuid => (uuid ? restorePictureOf(uuid) : restoreLastPicture()),
+    hasPreviousPicture: uuid => Boolean(uuid ? UNDO_JOURNAL.latestFor(uuid) : UNDO_JOURNAL.latest()),
     // One file for all of Sephral's modules, without a message id about their latest picture
     saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
   };
@@ -698,8 +726,15 @@ Hooks.once("ready", () => {
   document.addEventListener("pointermove", trackPointer, {capture: true, passive: true});
   document.documentElement?.addEventListener?.("pointerleave", forgetPointer);
   globalThis.addEventListener?.("blur", () => DROP_INDICATOR?.hide());
-  void ensureModuleTranslationsLoaded().then(() => showDropTip());
+  void ensureModuleTranslationsLoaded().then(() => {
+    showDropTip();
+    showFirstHint();
+  });
 });
+
+Hooks.on("renderTokenHUD", (app, html) => addPreviousPictureHud(app, html));
+Hooks.on("renderTileHUD", (app, html) => addPreviousPictureHud(app, html));
+Hooks.on("getHeaderControlsApplicationV2", (app, controls) => addPreviousPictureControl(app, controls));
 
 // Pastes and shortcuts have no position of their own, they go to what is under the mouse.
 let LAST_POINTER = null;
@@ -1059,7 +1094,9 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
 
   try {
     const dimensions = await readMediaDimensions(objectUrl, {video});
-    const optimizePlan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, getImageOptimizationOptions());
+    // The WebP conversion has its own choice in the dialog, so the plan here is the shrinking alone
+    const optimizePlan = video ? null : await getImageOptimizationPlan(preparedFile, dimensions, {...getImageOptimizationOptions(), webp: false});
+    const webpTools = video ? null : await createWebpTools(preparedFile, dimensions);
     // The original name, a copied link or a file such as "Tavern 30x20.webp" may name the grid of a new scene
     let grid = detectGridFromFileName(file.name, dimensions);
     // Without a grid in the name the picture itself is searched. The dialog opens at once and fills the grid in when
@@ -1077,7 +1114,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       sourceType: preparedFile.type,
       video,
       grid,
-      gridTools: grid ? null : gridTools
+      gridTools: grid ? null : gridTools,
+      webpTools
     });
     if ( !decision ) return;
 
@@ -1092,7 +1130,7 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     const source = cropped?.changed ? cropped.file : preparedFile;
     const sourceSize = cropped?.changed ? {width: cropped.width, height: cropped.height} : dimensions;
     const upload = needsUpload
-      ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize})
+      ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize, webp: decision.webp})
       : {file: preparedFile, ...dimensions};
     const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, upload.file);
     const path = needsUpload
@@ -1102,7 +1140,10 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     if ( path === objectUrl ) releaseObjectUrl = false;
 
     const layout = fitSceneToGrid(decision.grid, dimensions, upload);
-    const gridKept = (decision.action === ACTIONS.SCENE_BACKGROUND) && (decision.gridSource === "found") && Boolean(decision.grid);
+    const sceneWithGrid = (decision.action === ACTIONS.SCENE_BACKGROUND) && Boolean(decision.grid);
+    const gridKept = sceneWithGrid && (decision.gridSource === "found");
+    // A grid was found, but the scene gets another one: typed, measured or another type
+    const gridChanged = sceneWithGrid && Boolean(decision.gridFoundBefore) && (decision.gridSource !== "found");
     await executeAction({
       ...getDecisionOptions(decision),
       path,
@@ -1115,6 +1156,8 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
       context
     });
     if ( gridKept ) countFeature(MODULE_ID, "gridKept");
+    if ( gridChanged ) countFeature(MODULE_ID, "gridChanged");
+    if ( decision.webp && needsUpload && !getImageOptimizationOptions().webp ) countFeature(MODULE_ID, "webpChosen");
   } finally {
     if ( releaseObjectUrl ) URL.revokeObjectURL(objectUrl);
   }
@@ -1319,8 +1362,10 @@ function getImageOptimizationOptions() {
 }
 
 // The file that gets uploaded, shrunk or converted when the settings ask for it and the import did not opt out.
-async function prepareUploadFile(file, dimensions, {optimize=true}={}) {
-  const options = resolveOptimizationOptions(getImageOptimizationOptions(), optimize);
+async function prepareUploadFile(file, dimensions, {optimize=true, webp=null}={}) {
+  const options = {...resolveOptimizationOptions(getImageOptimizationOptions(), optimize)};
+  // The choice of the dialog for this import beats the setting
+  if ( typeof webp === "boolean" ) options.webp = webp;
   // Videos are uploaded as they are
   if ( isVideoFile(file) || !hasOptimizationOptions(options) ) return {file, ...dimensions};
   const result = await optimizeImageFile(file, dimensions, options);
@@ -1500,7 +1545,7 @@ function getUrlHostLabel(url) {
 }
 
 async function promptForImportDecision({previewUrl, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null, gridTools=null}) {
+  video=false, grid=null, context=null, gridTools=null, webpTools=null}) {
   const decision = normalizeActionDecision(await promptForAction({
     previewUrl,
     defaultName: defaultDocumentName(),
@@ -1512,7 +1557,8 @@ async function promptForImportDecision({previewUrl, width, height, remoteUrl=fal
     video,
     grid,
     context,
-    gridTools
+    gridTools,
+    webpTools
   }), {remoteUrl, video, context});
   if ( !decision ) return null;
 
@@ -1560,6 +1606,8 @@ function normalizeActionDecision(decision, {remoteUrl=false, video=false, contex
     gridSource: behavior.supportsGrid ? (decision.gridSource ?? null) : null,
     chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
     optimize: readOptimizeChoice(decision),
+    webp: (typeof decision.webp === "boolean") ? decision.webp : null,
+    gridFoundBefore: behavior.supportsGrid && Boolean(decision.gridFoundBefore),
     grid: behavior.supportsGrid ? normalizeGridChoice(decision.grid, {types: getGridTypeValues(), defaultType: getDefaultGridType()}) : null
   };
 }
@@ -1814,7 +1862,7 @@ async function readVideoDimensions(src) {
 }
 
 async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null, gridTools=null}) {
+  video=false, grid=null, context=null, gridTools=null, webpTools=null}) {
   const defaults = getDialogDefaults({remoteUrl, video, context});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
@@ -1921,6 +1969,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                   <small>${localize("SIPD.Dialog.NavigationHint")}</small>
                 </span>
               </label>
+              ${webpChoiceMarkup(webpTools)}
               ${optimizeChoiceMarkup(optimizeDescription)}
             </div>
           </div>
@@ -1939,7 +1988,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     position: {...importWindowState, height: "auto"},
     content,
     modal: true,
-    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height, gridTools}),
+    render: (_event, dialog) => configureDialogForm(dialog, defaults.uiTheme, previewUrl, {width, height, gridTools, webpTools}),
     buttons: [
       {
         action: "confirm",
@@ -1957,8 +2006,10 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
           squareCrop: Boolean(button.form.elements.squareCrop?.checked),
           chatMode: button.form.elements.chatMode?.value ?? CHAT_MODES.CURRENT,
           optimize: readOptimizeCheckbox(button.form),
+          webp: button.form.elements.webp ? Boolean(button.form.elements.webp.checked) : null,
           grid: readGridChoice(button.form),
-          gridSource: button.form.elements.gridSource?.value ?? null
+          gridSource: button.form.elements.gridSource?.value ?? null,
+          gridFoundBefore: button.form.elements.gridFoundBefore?.value === "1"
         })
       },
       {
@@ -2022,6 +2073,61 @@ function optimizeHintText(description) {
   return localize(description.ifSmaller ? "SIPD.Dialog.OptimizeHintIfSmaller" : "SIPD.Dialog.OptimizeHint");
 }
 
+// The choice to upload this import as WebP, with the size as it is and as WebP. The size is encoded when the dialog
+// opens (see startWebpEstimate). Only for pictures a canvas can re-encode, so not for videos, GIF, SVG, animated pictures
+// and files that already are WebP.
+function webpChoiceMarkup(webpTools) {
+  if ( !webpTools ) return "";
+  return `
+              <label class="checkbox sipd-choice-row sipd-webp-choice" data-option-row="webp">
+                <input type="checkbox" name="webp"${webpTools.checked ? " checked" : ""}>
+                <span>
+                  <strong>${escapeHtml(localize("SIPD.Dialog.Webp"))}</strong>
+                  <small data-webp-size>${escapeHtml(webpSizeText(webpTools))}</small>
+                </span>
+              </label>`;
+}
+
+// "8.2 MB, as WebP about 0.9 MB"
+function webpSizeText(webpTools, estimate=undefined) {
+  const original = formatFileSize(webpTools.size, getModuleLanguage());
+  if ( estimate === undefined ) return localize("SIPD.Dialog.WebpCalculating", {original});
+  if ( !estimate ) return localize("SIPD.Dialog.WebpUnknown", {original});
+  return localize("SIPD.Dialog.WebpSizes", {original, webp: formatFileSize(estimate, getModuleLanguage())});
+}
+
+// The WebP choice of one import, or null when the picture cannot be converted. It is preticked by the setting.
+async function createWebpTools(file, dimensions) {
+  if ( !file || (typeof globalThis.createImageBitmap !== "function") ) return null;
+  const options = getImageOptimizationOptions();
+  const plan = await getImageOptimizationPlan(file, dimensions, {maxSize: options.maxSize, webp: true, quality: options.quality});
+  // A plan that keeps WebP as it is (scaling only) is the shrinking choice, not this one
+  if ( !plan || (plan.type !== "image/webp") || (file.type === "image/webp") ) return null;
+  let pending = null;
+  return {
+    size: file.size,
+    checked: options.webp,
+    estimateAvailable: canEstimateWebp(plan),
+    estimate: () => (pending ??= estimateWebpSize(file, dimensions, {maxSize: options.maxSize, quality: options.quality}))
+  };
+}
+
+// Fills in the size as WebP once, a moment after the dialog showed. A picture that is too big is not encoded.
+function startWebpEstimate(form, webpTools) {
+  if ( !webpTools || webpTools.started ) return;
+  webpTools.started = true;
+  const label = form.querySelector("[data-webp-size]");
+  if ( !label ) return;
+  const show = estimate => {
+    if ( form.isConnected ) label.textContent = webpSizeText(webpTools, estimate);
+  };
+  if ( !webpTools.estimateAvailable ) return show(null);
+  // After the first paint, so the dialog opens at once
+  setTimeout(() => {
+    webpTools.estimate().then(show, () => show(null));
+  }, 50);
+}
+
 function readOptimizeCheckbox(form) {
   const field = form?.elements?.optimize;
   return field ? Boolean(field.checked) : true;
@@ -2070,6 +2176,7 @@ function gridFieldsMarkup({width, height, grid=null, tools=false}) {
                   </span>
                 </div>${toolsMarkup}
                 <input type="hidden" name="gridSource" value="${source}">
+                <input type="hidden" name="gridFoundBefore" value="${found ? "1" : ""}">
                 <input type="hidden" name="gridLead" value="${grid?.columns ? "columns" : "size"}">
                 <input type="hidden" name="gridExact" value="${found ? grid.exact : ""}">
                 <input type="hidden" name="gridAnchorX" value="${found ? (grid.anchor?.x ?? "") : ""}">
@@ -2249,6 +2356,8 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
     gridColumns.value = String(countSquares(width, height, grid.exact ?? grid.size).columns);
     if ( gridLead ) gridLead.value = "size";
     gridSource.value = source;
+    // Remembers that a search found this grid, whatever is changed afterwards
+    if ( (source === "found") && elements.gridFoundBefore ) elements.gridFoundBefore.value = "1";
     family = gridFamily(grid.type, types);
     refresh();
   };
@@ -2476,7 +2585,7 @@ function actionUsesSelectableUploadDirectory(action) {
   return getActionBehavior(action).supportsUploadDirectory;
 }
 
-function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0, gridTools=null}={}) {
+function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width=0, height=0, gridTools=null, webpTools=null}={}) {
   const form = dialog.element.querySelector("form");
   if ( !form ) return;
 
@@ -2506,6 +2615,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
   const squareCropField = form.elements.squareCrop;
   const chatModeField = form.elements.chatMode;
   const optimizeRow = form.querySelector('[data-option-row="optimize"]');
+  const webpRow = form.querySelector('[data-option-row="webp"]');
   const optionRows = {
     shareToPlayers: form.querySelector('[data-option-row="shareToPlayers"]'),
     activateScene: form.querySelector('[data-option-row="activateScene"]'),
@@ -2548,7 +2658,11 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     setRowVisible(optionRows.squareCrop, behavior.supportsPrototypeToken);
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
     setRowVisible(optionRows.grid, behavior.supportsGrid);
-    setRowVisible(optimizeRow, requiresPersistentPath(actionField.value, sharing));
+    const uploads = requiresPersistentPath(actionField.value, sharing);
+    setRowVisible(optimizeRow, uploads);
+    setRowVisible(webpRow, uploads);
+    // The size is only encoded when the picture is going to be uploaded
+    if ( uploads ) startWebpEstimate(form, webpTools);
   };
 
   actionField.addEventListener("change", updateFields);
@@ -2888,6 +3002,7 @@ async function executeAction(data) {
     shareImageToPlayers(data.path, data.name, data.recipients);
   }
   countImportTarget(data.action);
+  markFirstUse();
   if ( actionTargetsContext(data.action, data.context) ) countFeature(MODULE_ID, "contextImport");
 }
 
@@ -3087,8 +3202,9 @@ async function createTileFromImage({name, path, width, height, dropPoint=null}, 
 async function replaceTileImage({path, context}) {
   const tile = (context?.kind === CONTEXT_KINDS.TILE) ? context.document : null;
   if ( !tile ) throw new Error(localize("SIPD.Error.NoTarget"));
+  const record = rememberPictures("tile", [pictureChange(tile, "texture.src", path)]);
   await tile.update({"texture.src": path});
-  ui.notifications.info(localize("SIPD.Notification.TileUpdated", {name: context.name}));
+  notifyWithUndo(localize("SIPD.Notification.TileUpdated", {name: context.name}), record);
   return tile;
 }
 
@@ -3467,29 +3583,39 @@ async function updateTokenImages({path, prototypeToken=false, tokenScope=null, c
       if ( actors.has(token.actorId) && (isGM || token.isOwner) ) ids.add(token.id);
     }
     const updates = Array.from(ids, id => ({_id: id, "texture.src": path}));
+    // What each of them showed before: the tokens, the prototypes and for the portrait scope the actor portraits
+    const changes = updates.map(update => pictureChange(scene.tokens?.get?.(update._id), "texture.src", path));
+    for ( const actor of actors.values() ) {
+      changes.push(pictureChange(actor, "prototypeToken.texture.src", path));
+      if ( scope === TOKEN_SCOPES.PORTRAIT ) changes.push(pictureChange(actor, "img", path));
+    }
+    const record = rememberPictures("token", changes);
     await scene.updateEmbeddedDocuments("Token", updates);
     for ( const actor of actors.values() ) {
       const change = {"prototypeToken.texture.src": path};
       if ( scope === TOKEN_SCOPES.PORTRAIT ) change.img = path;
       await actor.update(change);
     }
-    ui.notifications.info(localize("SIPD.Notification.TokenUpdated", {count: updates.length}));
+    notifyWithUndo(localize("SIPD.Notification.TokenUpdated", {count: updates.length}), record);
     return tokens;
   }
 
   const updates = tokens.map(token => ({_id: token.document.id, "texture.src": path}));
+  const changes = tokens.map(token => pictureChange(token.document, "texture.src", path));
+  const linkedActors = new Map();
+  if ( prototypeToken && !scope ) {
+    for ( const token of tokens ) {
+      if ( token.document.actorLink && token.actor ) linkedActors.set(token.actor.id, token.actor);
+    }
+    for ( const actor of linkedActors.values() ) changes.push(pictureChange(actor, "prototypeToken.texture.src", path));
+  }
+  const record = rememberPictures("token", changes);
   await scene.updateEmbeddedDocuments("Token", updates);
 
   // Linked tokens share their actor, so the prototype keeps the new image for the next placement
-  if ( prototypeToken && !scope ) {
-    const actors = new Map();
-    for ( const token of tokens ) {
-      if ( token.document.actorLink && token.actor ) actors.set(token.actor.id, token.actor);
-    }
-    for ( const actor of actors.values() ) await actor.update({"prototypeToken.texture.src": path});
-  }
+  for ( const actor of linkedActors.values() ) await actor.update({"prototypeToken.texture.src": path});
 
-  ui.notifications.info(localize("SIPD.Notification.TokenUpdated", {count: tokens.length}));
+  notifyWithUndo(localize("SIPD.Notification.TokenUpdated", {count: tokens.length}), record);
   return tokens;
 }
 
@@ -3499,17 +3625,197 @@ async function updateActorPortraits({path, context=null}) {
     throw new Error(localize("SIPD.Error.NoActor"));
   }
 
+  const record = rememberPictures("actor", actors.map(actor => pictureChange(actor, "img", path)));
   for ( const actor of actors ) await actor.update({img: path});
-  ui.notifications.info(localize("SIPD.Notification.PortraitUpdated", {name: actors.map(actor => actor.name).join(", ")}));
+  notifyWithUndo(localize("SIPD.Notification.PortraitUpdated", {name: actors.map(actor => actor.name).join(", ")}), record);
   return actors;
 }
 
 async function updateItemImage({path, context=null}) {
   const item = (context?.kind === CONTEXT_KINDS.ITEM) ? context.document : null;
   if ( !item ) throw new Error(localize("SIPD.Error.NoTarget"));
+  const record = rememberPictures("item", [pictureChange(item, "img", path)]);
   await item.update({img: path});
-  ui.notifications.info(localize("SIPD.Notification.ItemUpdated", {name: item.name}));
+  notifyWithUndo(localize("SIPD.Notification.ItemUpdated", {name: item.name}), record);
   return item;
+}
+
+/* -------------------------------------------- */
+/*  Picture back                                */
+/* -------------------------------------------- */
+
+// The last replacements of this session. A record holds what one import changed (token, prototype, portrait).
+const UNDO_JOURNAL = createUndoJournal();
+
+function pictureChange(document, path, after) {
+  if ( !document?.uuid ) return null;
+  const source = document._source ?? document;
+  const before = path.split(".").reduce((value, key) => value?.[key], source);
+  return describeChange(document.uuid, path, before, after);
+}
+
+function rememberPictures(kind, changes) {
+  return UNDO_JOURNAL.record({kind, changes});
+}
+
+// The success message with an Undo link. Foundry cleans the message text, so the link is added to the shown notification.
+function notifyWithUndo(message, record) {
+  const notification = ui.notifications.info(message);
+  if ( !record || (notification?.id === undefined) || (typeof document?.querySelector !== "function") ) return notification;
+  const started = Date.now();
+  const timer = setInterval(() => {
+    const item = document.querySelector(`li.notification[data-id="${notification.id}"] p`);
+    if ( item ) {
+      clearInterval(timer);
+      const link = document.createElement("a");
+      link.className = "sipd-undo-link";
+      link.href = "#";
+      link.textContent = localize("SIPD.Undo.Link");
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        notification.remove?.();
+        void restoreRecord(record);
+      });
+      item.append(" ", link);
+    } else if ( Date.now() - started > 2000 ) {
+      clearInterval(timer);
+    }
+  }, 40);
+  return notification;
+}
+
+// Puts back what a record changed: token, prototype and portrait, exactly the documents and paths it holds.
+async function restoreRecord(record) {
+  if ( !record || !UNDO_JOURNAL.get(record.id) ) return false;
+  UNDO_JOURNAL.remove(record.id);
+  const byDocument = new Map();
+  for ( const change of record.changes ) {
+    if ( !byDocument.has(change.uuid) ) byDocument.set(change.uuid, {});
+    byDocument.get(change.uuid)[change.path] = change.before;
+  }
+  let restored = 0;
+  let failed = 0;
+  for ( const [uuid, update] of byDocument ) {
+    try {
+      const document = await fromUuid(uuid);
+      if ( !document ) throw new Error("gone");
+      await document.update(update);
+      restored++;
+    } catch (error) {
+      failed++;
+      console.warn(`${MODULE_ID} | The previous picture of ${uuid} could not be restored`, error);
+    }
+  }
+  if ( restored ) {
+    countFeature(MODULE_ID, "imageRestored");
+    ui.notifications.info(localize("SIPD.Undo.Restored", {count: restored}));
+  }
+  if ( failed ) ui.notifications.warn(localize("SIPD.Undo.Failed", {count: failed}));
+  return restored > 0;
+}
+
+function restorePictureOf(uuid) {
+  return restoreRecord(UNDO_JOURNAL.latestFor(uuid));
+}
+
+function restoreLastPicture() {
+  const record = UNDO_JOURNAL.latest();
+  if ( !record ) {
+    ui.notifications.info(localize("SIPD.Undo.Nothing"));
+    return false;
+  }
+  return restoreRecord(record);
+}
+
+// A "Previous picture" button in the token HUD and the tile HUD while a replacement of this session can be undone
+function addPreviousPictureHud(app, html) {
+  const document = app?.document ?? app?.object?.document;
+  const element = html instanceof HTMLElement ? html : html?.[0];
+  if ( !document?.uuid || !element || !UNDO_JOURNAL.latestFor(document.uuid) ) return;
+  if ( element.querySelector(".sipd-previous-picture") ) return;
+  const button = globalThis.document.createElement("button");
+  button.type = "button";
+  button.className = "control-icon sipd-previous-picture";
+  button.dataset.action = "sipdPreviousPicture";
+  button.dataset.tooltip = localize("SIPD.Undo.Previous");
+  button.setAttribute("aria-label", localize("SIPD.Undo.Previous"));
+  button.innerHTML = '<i class="fa-solid fa-rotate-left"></i>';
+  button.addEventListener("click", async event => {
+    event.preventDefault();
+    event.stopPropagation();
+    await restorePictureOf(document.uuid);
+    if ( !UNDO_JOURNAL.latestFor(document.uuid) ) button.remove();
+  });
+  (element.querySelector(".col.right") ?? element.querySelector(".col.left") ?? element).append(button);
+}
+
+// The same in the header of an actor or item sheet
+function addPreviousPictureControl(app, controls) {
+  const document = app?.document;
+  if ( !["Actor", "Item"].includes(document?.documentName) || !Array.isArray(controls) ) return;
+  if ( controls.some(control => control.action === "sipdPreviousPicture") ) return;
+  const restore = () => void restorePictureOf(document.uuid);
+  controls.push({
+    action: "sipdPreviousPicture",
+    icon: "fa-solid fa-rotate-left",
+    label: "SIPD.Undo.Previous",
+    visible: () => Boolean(UNDO_JOURNAL.latestFor(document.uuid)),
+    // v13 reads onClick, v14 calls it too
+    onClick: restore,
+    callback: restore
+  });
+}
+
+/* -------------------------------------------- */
+/*  First hint                                  */
+/* -------------------------------------------- */
+
+// Whether this GM has used the module in this browser before the hint existed: an import dialog remembered its window
+// or an upload folder
+function hasUsedImportBefore() {
+  try {
+    const history = game.settings.get(MODULE_ID, UPLOAD_DIRECTORY_HISTORY_SETTING);
+    if ( Array.isArray(history) && history.length ) return true;
+    return Boolean(getSavedWindowStates()?.[WINDOW_KEYS.IMPORT]);
+  } catch (_error) {
+    return false;
+  }
+}
+
+// One quiet notification, once per world, for a GM who has not imported anything yet. No window, no chat message.
+function showFirstHint() {
+  if ( !game.user?.isGM ) return null;
+  let state = "";
+  try {
+    state = game.settings.get(MODULE_ID, FIRST_HINT_SETTING);
+  } catch (_error) {
+    return null;
+  }
+  if ( !shouldShowFirstHint({isGM: true, state, usedBefore: hasUsedImportBefore()}) ) {
+    // Used before the hint existed: it never comes
+    if ( state === FIRST_HINT_STATES.NONE ) void game.settings.set(MODULE_ID, FIRST_HINT_SETTING, FIRST_HINT_STATES.USED);
+    return null;
+  }
+  void game.settings.set(MODULE_ID, FIRST_HINT_SETTING, FIRST_HINT_STATES.SHOWN);
+  return ui.notifications.info(localize("SIPD.Hint.First", {key: formatQuickKey("quickInsert")}));
+}
+
+function formatQuickKey(name) {
+  try {
+    return formatKeybinding(game.keybindings?.get?.(MODULE_ID, name)?.[0]) || "Alt+V";
+  } catch (_error) {
+    return "Alt+V";
+  }
+}
+
+// The first import of a GM ends the hint for good
+function markFirstUse() {
+  if ( !game.user?.isGM ) return;
+  try {
+    if ( game.settings.get(MODULE_ID, FIRST_HINT_SETTING) !== stateAfterImport() ) {
+      void game.settings.set(MODULE_ID, FIRST_HINT_SETTING, stateAfterImport());
+    }
+  } catch (_error) {}
 }
 
 // A new last page of the open journal entry, which then shows it
@@ -4179,6 +4485,22 @@ class SelfTestMenu extends foundry.applications.api.ApplicationV2 {
 }
 
 export const __test__ = {
+  UNDO_JOURNAL,
+  FIRST_HINT_SETTING,
+  pictureChange,
+  rememberPictures,
+  restoreRecord,
+  restorePictureOf,
+  restoreLastPicture,
+  notifyWithUndo,
+  addPreviousPictureHud,
+  addPreviousPictureControl,
+  showFirstHint,
+  markFirstUse,
+  webpChoiceMarkup,
+  webpSizeText,
+  createWebpTools,
+  startWebpEstimate,
   describeChatImages,
   describeDebugState,
   MODULE_ID,

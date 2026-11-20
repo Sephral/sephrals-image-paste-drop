@@ -176,6 +176,16 @@ When you drop an image onto the canvas and create a centered tile, the tile is c
 
 Pasted images and tiles scaled to fit the scene are centered on the scene. A tile grid from several images is centered on the drop point or on the scene. Large images in a grid are scaled down evenly so the whole grid fits into the scene.
 
+## Picture back
+
+Replacing the picture of a token, tile, actor portrait or item can be undone with one click:
+
+* The success message has an *Undo* link while it is shown.
+* The token HUD and the tile HUD get a *Previous picture* button, the header of an actor or item sheet gets a *Previous picture* entry. They appear as long as a replacement of this session can be undone.
+* The shortcut *Put back the previous picture* (no key by default, set one under **Configure Controls**) undoes the last replacement of this session. `game.modules.get("sephrals-image-paste-drop").api.restorePreviousPicture(uuid)` does the same for one document, without an uuid for the last replacement.
+
+It puts back exactly what the import changed: the token or tokens, the prototype token and the portrait, depending on what the row *Change* said. The last five replacements per document are kept. They live in the memory of your browser and are gone after a reload. The uploaded file stays in the storage folder. A player can only put back what they own, and a document that was deleted meanwhile is skipped with a message.
+
 ## Smaller files
 
 Two settings make uploads smaller before they leave your browser:
@@ -190,6 +200,8 @@ When an upload would be shrunk or converted, the import dialog shows a checkbox 
 The dialog for several images has one checkbox for all of them. Its label names the size limit and the target format, its hint says how many of the images are affected, and each affected thumbnail shows its new size or format. Unchecked, every image of this batch is uploaded as it is.
 
 Scenes and tiles created from a shrunk image use its new size.
+
+*Upload as WebP* is a checkbox of its own for every image that can be converted (PNG, JPEG and other still pictures, not videos, GIF, SVG, animated pictures or files that are WebP already). The line below it shows the size of the file and, a moment after the dialog opens, what it would be as WebP, for example *8.2 MB, as WebP about 0.9 MB*. The browser really encodes the picture with the chosen quality (and the size limit, if one is set) to find out, nothing is stored. Pictures above about 48 megapixels are not encoded, the line then shows the size of the file only, and so does a browser that cannot write WebP. The checkbox starts ticked when *Save uploads as WebP* is on and applies to this import only. The size setting keeps its own checkbox *Save optimized*.
 
 ## Keyboard shortcuts
 
@@ -270,6 +282,10 @@ The file contains chat text and whispers. Check it before you share it.
 
 The first button in the module settings, *Sephral’s Modules* (GMs only), opens one window for all of Sephral's modules in the world: the version, self test, settings, manual and demo video of each, a button that switches on an installed module that is off (Foundry then reloads the world for everyone), and the debug file. Below, *More from Sephral* lists other modules that fit the game system of the world, shown only after a click, each with its demo video and an *Install* button. Foundry installs modules only on its setup screen, so the button copies the module's link (manifest URL) and shows the steps with a short clip. When the GM launches the world again, the window opens once with the new module and its *Enable* button. The list is part of the module. Only a video you start is loaded, from the module page on GitHub. If the GM agreed to the usage statistics, the window also counts how it is used: opened, the other modules shown, a video or install link of one of them, a module installed or switched on from it. It never records which module.
 
+## First hint
+
+A GM who has never imported anything in this browser gets one short notification once per world after the start, for example *Paste a picture with Alt + V or drop it on the map to make a scene, tile or token.* It does not come again, not after the first import either, and it never opens a window or writes to the chat. The state is the hidden world setting `firstHint`.
+
 ## Usage statistics
 
 The module can take part in a small usage report shared by all of Sephral’s modules. Nothing is counted or sent until the GM agrees: shortly after the world starts, the active GM is asked, and the question comes back at every start until there is an answer. The answer counts for all of Sephral’s modules in the world. *Share usage statistics* in the module settings turns the report on or off at any time, and *Manage statistics* below it shows what the report contains right now.
@@ -279,7 +295,8 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * on how many of the last 30 days the module was used
 * how often images are pasted or dropped, several images are imported at once, and images go to a scene, a tile, a journal or map pin, a token or portrait, an item, or are shown to the players or posted in the chat
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
-* how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map, how many keep the found grid unchanged and how many get a hexagon grid
+* how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map, how many keep the found grid unchanged, how many get another grid after one was found (typed, measured or another grid type) and how many get a hexagon grid
+* how often a replaced picture is put back, and how often *Upload as WebP* is ticked in the dialog while the setting is off
 * the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP*, *Show the drop target while dragging* and *Look for the grid on maps* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 

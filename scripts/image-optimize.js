@@ -235,6 +235,50 @@ async function optimizeImageFile(file, {width, height}, options={}) {
   };
 }
 
+
+// Above this many pixels the size as WebP is not tried, encoding would stall the dialog
+const WEBP_ESTIMATE_MAX_PIXELS = 48000000;
+
+// Whether the size as WebP can be shown for a picture of this size
+function canEstimateWebp({width, height}={}) {
+  const pixels = Number(width) * Number(height);
+  return (pixels > 0) && (pixels <= WEBP_ESTIMATE_MAX_PIXELS);
+}
+
+// Encodes the picture as WebP the way an upload would and returns the size in bytes, or null when the browser cannot
+// (no WebP encoder, unreadable file, too big). Nothing is stored.
+async function estimateWebpSize(file, {width, height}, {maxSize=0, quality=0.85}={}) {
+  const plan = planImageOptimization({type: file?.type, width, height, animated: isAnimatedImageData(await readImageHeader(file), file?.type)},
+    {maxSize, webp: true, quality});
+  if ( !plan || !canEstimateWebp(plan) ) return null;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+    const blob = await drawToBlob(bitmap, plan);
+    return (blob?.size && (blob.type === "image/webp")) ? blob.size : null;
+  } catch (_error) {
+    return null;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
+// "820 KB", "8.2 MB" in the language of the module
+function formatFileSize(bytes, locale="en") {
+  const size = Number(bytes);
+  if ( !(size >= 0) ) return "";
+  const format = (value, digits) => {
+    try {
+      return new Intl.NumberFormat(locale, {maximumFractionDigits: digits}).format(value);
+    } catch (_error) {
+      return String(Math.round(value * (10 ** digits)) / (10 ** digits));
+    }
+  };
+  if ( size < 1024 ) return `${format(size, 0)} B`;
+  if ( size < 1024 * 1024 ) return `${format(size / 1024, size < 10240 ? 1 : 0)} KB`;
+  return `${format(size / (1024 * 1024), size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
 // The centered square of a picture: where it starts and how long its side is. A square picture has nothing to cut.
 function squareCropRect(width, height) {
   const w = Math.round(Number(width));
@@ -305,5 +349,9 @@ export {
   resolveOptimizationOptions,
   replaceFileExtension,
   getImageOptimizationPlan,
-  optimizeImageFile
+  optimizeImageFile,
+  canEstimateWebp,
+  estimateWebpSize,
+  formatFileSize,
+  WEBP_ESTIMATE_MAX_PIXELS
 };

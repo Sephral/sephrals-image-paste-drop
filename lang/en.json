@@ -233,5 +233,17 @@
   "SIPD.Grid.Measured": "Set from your measurement. Check it on the preview.",
   "SIPD.Grid.NotFound": "No printed grid found on this map. Enter the size of a cell, or use Measure and drag across a few cells.",
   "SIPD.Grid.Unreadable": "The picture could not be read for the grid search. Enter the size of a cell by hand.",
-  "SIPD.SelfTest.GridFit": "Foundry places its grid differently than the grid fit expects, or this browser cannot read the pixels of a picture. A found grid may sit a little off."
+  "SIPD.SelfTest.GridFit": "Foundry places its grid differently than the grid fit expects, or this browser cannot read the pixels of a picture. A found grid may sit a little off.",
+  "SIPD.Dialog.Webp": "Upload as WebP",
+  "SIPD.Dialog.WebpSizes": "{original}, as WebP about {webp}",
+  "SIPD.Dialog.WebpCalculating": "{original}, working out the size as WebP",
+  "SIPD.Dialog.WebpUnknown": "{original}, the size as WebP could not be worked out here",
+  "SIPD.Undo.Link": "Undo",
+  "SIPD.Undo.Previous": "Previous picture",
+  "SIPD.Undo.Restored": "Previous picture restored ({count}).",
+  "SIPD.Undo.Failed": "{count} could not be put back. The document may be gone or locked.",
+  "SIPD.Undo.Nothing": "No replaced picture to put back in this session.",
+  "SIPD.Keybindings.PreviousPicture.Name": "Put back the previous picture",
+  "SIPD.Keybindings.PreviousPicture.Hint": "Undoes the last picture replacement of this session (token, tile, portrait or item). No key is set by default.",
+  "SIPD.Hint.First": "Paste a picture with {key} or drop it on the map to make a scene, tile or token."
 }
