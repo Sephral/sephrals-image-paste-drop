@@ -144,8 +144,8 @@ The new journal entry has the default permissions, so players only see the pin's
 
 The token target changes the image of every selected token, or of the token the image was dropped onto. The row *Change* decides what else gets the picture:
 
-* *Only this token*: just the token or the selected tokens (the default).
-* *The actor's prototype token and all its tokens on this scene*: the prototype token of the actor, so the next token placed from it looks the same, and every token of that actor on the scene of the token, linked or not.
+* *Only this token*: just the token or the selected tokens.
+* *The actor's prototype token and all its tokens on this scene*: the prototype token of the actor, so the next token placed from it looks the same, and every token of that actor on the scene of the token, linked or not (the default, as the prototype token changed before this choice existed).
 * *As above, and the actor portrait*: additionally the portrait of the actor.
 
 The last choice is kept per user and preselected the next time. The setting *Ask what a token picture changes* hides the row when you do not want the question: the last choice then applies silently. The shortcuts never ask, they always use the last choice. Only what you own is changed (GMs everything). The size of the tokens stays the same.

@@ -418,7 +418,8 @@ Hooks.once("init", () => {
     scope: "client",
     config: false,
     type: String,
-    default: TOKEN_SCOPES.TOKEN
+    // Before the choice existed the prototype token changed by default, so a first drop keeps doing that
+    default: TOKEN_SCOPES.ACTOR
   });
 
   game.settings.register(MODULE_ID, SQUARE_TOKEN_CROP_SETTING, {
@@ -1144,9 +1145,7 @@ async function resolveImportDecision({quickTarget=null, ...prompt}) {
   return promptForImportDecision(prompt);
 }
 
-// The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
-// is not possible right now, for example a token target without a selected token.
-// The grid choice of a grid from the file name or from the picture
+// The token scope, crop default and question setting of the token target
 function getLastTokenScope() {
   try {
     return normalizeTokenScope(game.settings.get(MODULE_ID, LAST_TOKEN_SCOPE_SETTING));
@@ -1171,6 +1170,9 @@ function askForTokenScope() {
   }
 }
 
+// The decision the dialog would return with its defaults, for the target of a shortcut. Null when the target
+// is not possible right now, for example a token target without a selected token.
+// The grid choice of a grid from the file name or from the picture
 function gridChoiceFromSource(grid) {
   if ( grid.source === "found" ) return {type: grid.type, size: grid.size, exact: grid.exact, anchor: grid.anchor};
   return {type: getDefaultGridType(), size: grid.size, columns: grid.columns};
