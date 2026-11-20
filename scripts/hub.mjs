@@ -16,7 +16,7 @@
  */
 
 export const HUB_LIB_VERSION = 4;
-export const CATALOG_REVISION = 2026111402;
+export const CATALOG_REVISION = 2026112001;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -177,7 +177,13 @@ const INTEGRATIONS = [
       de: "Ergänzt jede Albumseite um die Kampfbilanz des Spielabends." } },
   { module: "sephrals-campaign-album", with: "sephrals-combat-log-stats",
     text: { en: "Turns your game nights into an album, with the night's combat totals on every page.",
-      de: "Macht aus euren Spielabenden ein Album, mit der Kampfbilanz des Abends auf jeder Seite." } }
+      de: "Macht aus euren Spielabenden ein Album, mit der Kampfbilanz des Abends auf jeder Seite." } },
+  { module: "sephrals-handout-lens", with: "sephrals-image-paste-drop",
+    text: { en: "Pictures you show to the players open in a lens: they zoom and pan, and you close it for everyone.",
+      de: "Bilder, die du den Spielern zeigst, öffnen sich in einer Lupe: Sie zoomen und schieben, du schließt sie für alle." } },
+  { module: "sephrals-image-paste-drop", with: "sephrals-handout-lens",
+    text: { en: "Paste or drop a picture and show it to everyone with one click, Handout Lens opens it for reading.",
+      de: "Bild einfügen oder hineinziehen und mit einem Klick allen zeigen, Handout Lens öffnet es zum Lesen." } }
 ];
 
 /* -------------------------------------------- */
@@ -258,7 +264,8 @@ const TEXTS = {
     installedBanner: "{title} is installed now. Click Enable to switch it on in this world.",
     allModules: "All modules on GitHub",
     discord: "Discord",
-    gmOnly: "Only a GM can open Sephral’s Modules."
+    gmOnly: "Only a GM can open Sephral’s Modules.",
+    hintClick: "Click to see it in Sephral’s Modules."
   },
   de: {
     title: "Sephral’s Module",
@@ -333,7 +340,8 @@ const TEXTS = {
     installedBanner: "{title} ist jetzt installiert. Klick auf Aktivieren, um es in dieser Welt einzuschalten.",
     allModules: "Alle Module auf GitHub",
     discord: "Discord",
-    gmOnly: "Nur eine SL kann Sephral’s Module öffnen."
+    gmOnly: "Nur eine SL kann Sephral’s Module öffnen.",
+    hintClick: "Ein Klick zeigt es in Sephral’s Modules."
   }
 };
 
@@ -454,6 +462,73 @@ export function openSephralsModules() {
   }
   const owner = registry().owner ?? SELF;
   return owner.open();
+}
+
+/* -------------------------------------------- */
+/*  Hints in context                            */
+/* -------------------------------------------- */
+
+const HINT_STYLE_ID = "sephrals-hub-hint-styles";
+const HINT_STYLES = `
+.sephrals-partner-hint { display: inline-flex; align-items: center; margin-left: 4px; opacity: 0.6; cursor: pointer; color: inherit; font-size: 0.9em; text-decoration: none; }
+.sephrals-partner-hint:hover, .sephrals-partner-hint:focus-visible { opacity: 1; text-decoration: none; }
+`;
+
+/**
+ * A small info icon with a tooltip where another of Sephral's modules would add something here, for the GM only and only
+ * while that module is not active. The text comes from INTEGRATIONS ({module: missing, with: here}). A click opens the
+ * window on that module. Empty string otherwise, so callers can always insert the result.
+ * @param {string} here      The module that shows the hint
+ * @param {string} missing   The module the hint is about
+ * @returns {string}         HTML
+ */
+export function partnerHint(here, missing) {
+  try {
+    return hintMarkup(here, missing);
+  } catch (error) {
+    // A hint is never worth an error in the module that shows it
+    console.warn("Sephral's Modules | A hint could not be drawn", error);
+    return "";
+  }
+}
+
+function hintMarkup(here, missing) {
+  const game = globalThis.game;
+  if (!game?.user?.isGM || !here || !missing || game.modules?.get?.(missing)?.active) return "";
+  const catalog = registry().catalog ?? { modules: CATALOG, integrations: INTEGRATIONS };
+  const integration = (catalog.integrations ?? []).find((item) => (item.module === missing) && (item.with === here));
+  if (!integration) return "";
+  const title = catalog.modules.find((entry) => entry.id === missing)?.title ?? shortTitle(game.modules?.get?.(missing)?.title) ?? missing;
+  const tip = `${title}: ${localized(integration.text)} ${text("hintClick")}`;
+  ensureHintStyles();
+  listenToHints();
+  return `<a class="sephrals-partner-hint" role="button" tabindex="0" data-sephrals-hint="${escape(missing)}"`
+    + ` data-tooltip="${escape(tip)}" aria-label="${escape(tip)}"><i class="fa-solid fa-circle-info" inert></i></a>`;
+}
+
+function ensureHintStyles() {
+  if ((typeof document?.getElementById !== "function") || document.getElementById(HINT_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = HINT_STYLE_ID;
+  style.textContent = HINT_STYLES;
+  document.head.appendChild(style);
+}
+
+// One listener per page for the hints of every copy: the window opens on the module of the hint
+function listenToHints() {
+  const reg = registry();
+  if (reg.hintListener || (typeof document?.addEventListener !== "function")) return;
+  reg.hintListener = true;
+  const open = (event) => {
+    const hint = event.target?.closest?.("[data-sephrals-hint]");
+    if (!hint || ((event.type === "keydown") && !["Enter", " "].includes(event.key))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    registry().focus = hint.dataset.sephralsHint;
+    openSephralsModules();
+  };
+  document.addEventListener("click", open, true);
+  document.addEventListener("keydown", open, true);
 }
 
 /* -------------------------------------------- */
@@ -787,18 +862,27 @@ let WindowClass = null;
  */
 function openWindow({ auto = false } = {}) {
   if (!auto) void countUse("hubOpen");
+  // A hint in context asked for a module: unfold the other modules when it is not installed
+  focusModule = registry().focus ?? null;
+  registry().focus = null;
+  const unfold = Boolean(focusModule) && !globalThis.game?.modules?.get?.(focusModule);
   WindowClass ??= createWindowClass();
   const existing = globalThis.foundry.applications.instances?.get?.(WINDOW_ID);
   if (existing) {
+    if (unfold) existing.moreOpen = true;
     existing.render({ force: true });
     existing.bringToFront?.();
     return existing;
   }
   ensureStyles();
   const app = new WindowClass();
+  if (unfold) app.moreOpen = true;
   app.render({ force: true });
   return app;
 }
+
+/** The module a hint in context opened the window for, highlighted until the window opens again without one. */
+let focusModule = null;
 
 function createWindowClass() {
   const { ApplicationV2 } = globalThis.foundry.applications.api;
@@ -863,6 +947,7 @@ function createWindowClass() {
 
     _replaceHTML(result, content) {
       content.innerHTML = result;
+      content.querySelector(".sh-focus")?.scrollIntoView?.({ block: "center" });
     }
   };
 }
@@ -1058,7 +1143,8 @@ function moduleRow(module, entry) {
       + `<i class="fa-solid fa-power-off" aria-hidden="true"></i> ${escape(text("enable"))}</button>`;
   }
   const fresh = !module.active && (module.id === justInstalled);
-  return `<li class="sh-row${module.active ? "" : " sh-inactive"}${fresh ? " sh-row-new" : ""}">
+  const focus = !module.active && (module.id === focusModule);
+  return `<li class="sh-row${module.active ? "" : " sh-inactive"}${fresh ? " sh-row-new" : ""}${focus ? " sh-row-new sh-focus" : ""}">
     <div class="sh-row-main">
       <div class="sh-row-title"><strong>${escape(module.title)}</strong>
         <span class="sh-pill">${escape(module.version)}</span>
@@ -1071,7 +1157,7 @@ function moduleRow(module, entry) {
 
 function card(entry, extra = {}) {
   const fit = extra.partner ? `<span class="sh-pill sh-accent">${escape(text("fits", { title: extra.partner }))}</span>` : "";
-  return `<li class="sh-card${extra.partner ? " sh-card-works" : ""}">
+  return `<li class="sh-card${extra.partner ? " sh-card-works" : ""}${entry.id === focusModule ? " sh-card-focus sh-focus" : ""}">
     <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${fit}</div>
     <p>${escape(extra.text ? localized(extra.text) : localized(entry.text))}</p>
     <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="install" data-count="hubLink" data-module="${escape(entry.id)}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${escape(text("install"))}</span></button>${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-count="hubVideo" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}${packageLink(entry)}</div>
@@ -1276,6 +1362,7 @@ body.theme-light .sephrals-hub:not(.themed), .sephrals-hub.themed.theme-light {
 .sephrals-hub .sh-banner.sh-banner-new { background: var(--sh-accent-soft); border-color: var(--sh-accent); }
 .sephrals-hub .sh-banner.sh-banner-new i { color: var(--sh-accent); }
 .sephrals-hub .sh-row.sh-row-new { border-color: var(--sh-accent); box-shadow: 0 0 0 1px var(--sh-accent); }
+.sephrals-hub .sh-card.sh-card-focus { border-color: var(--sh-accent); box-shadow: 0 0 0 1px var(--sh-accent); }
 .sephrals-hub-install .window-content { gap: 14px; }
 .sephrals-hub .sh-lead { font-size: 15px; line-height: 1.45; }
 .sephrals-hub .sh-link { display: flex; align-items: center; gap: 8px; }

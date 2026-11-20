@@ -61,7 +61,7 @@ import {
 import {DropIndicator} from "./drop-indicator.js";
 import {countFeature, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
-import {registerHubModule} from "./hub.mjs";
+import {partnerHint, registerHubModule} from "./hub.mjs";
 
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
@@ -1922,6 +1922,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
                 <select name="action">
                   ${actionOptionsMarkup(defaults.action, {remoteUrl, video, context})}
                 </select>
+                <span data-option-row="shareHint">${partnerHint(MODULE_ID, "sephrals-handout-lens")}</span>
               </div>
             </div>
             ${gridFieldsMarkup({width, height, grid, tools: Boolean(gridTools?.enabled)})}
@@ -1951,7 +1952,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
               <label class="checkbox sipd-choice-row" data-option-row="shareToPlayers">
                 <input type="checkbox" name="shareToPlayers"${defaults.shareToPlayers ? " checked" : ""}>
                 <span>
-                  <strong>${localize("SIPD.Dialog.ShareToPlayers")}</strong>
+                  <strong>${localize("SIPD.Dialog.ShareToPlayers")}${partnerHint(MODULE_ID, "sephrals-handout-lens")}</strong>
                   <small>${localize("SIPD.Dialog.ShareHint")}</small>
                 </span>
               </label>
@@ -2625,7 +2626,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     prototypeToken: form.querySelector('[data-option-row="prototypeToken"]'),
     squareCrop: form.querySelector('[data-option-row="squareCrop"]'),
     chatMode: form.querySelector('[data-option-row="chatMode"]'),
-    grid: form.querySelector('[data-option-row="grid"]')
+    grid: form.querySelector('[data-option-row="grid"]'),
+    shareHint: form.querySelector('[data-option-row="shareHint"]')
   };
   const setRowVisible = (row, visible) => {
     if ( !row ) return;
@@ -2650,6 +2652,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     // Recipients apply to the share target and to the "also show" option once it is checked
     const sharing = showShare && Boolean(shareToPlayersField.checked);
     setRowVisible(optionRows.shareToPlayers, showShare);
+    setRowVisible(optionRows.shareHint, actionField.value === ACTIONS.SHARE_IMAGE);
     setRowVisible(optionRows.activateScene, behavior.supportsActivateScene);
     setRowVisible(optionRows.navigation, behavior.supportsNavigation);
     setRowVisible(optionRows.uploadDirectory, showUploadDirectory);
