@@ -43,6 +43,7 @@ Drop an image where it belongs and the dialog starts with the matching target, n
 | --- | --- |
 | a token on the canvas | its token image, also when other tokens are selected. A linked token also offers the portrait of its actor. |
 | a tile on the canvas (GM) | a new image for that tile. The tile keeps its place and size. |
+| a map pin on the canvas (GM) | a new picture for that pin, see [Bridges to other Sephral modules](#bridges-to-other-sephral-modules). The pin keeps its place and text. |
 | an open actor sheet | the portrait of that actor |
 | an open item sheet | the image of that item |
 | an open journal entry | a new image page at the end, which the journal then shows. The name from the dialog becomes the page name. |
@@ -52,7 +53,7 @@ You can still pick another target in the dialog. A target chosen because of wher
 
 `Ctrl+V` works the same way: with the mouse over a token, a tile or an open sheet, the pasted image goes to that one. With the mouse over an empty spot on the canvas a paste keeps your usual target. `Alt+V` sends the copied image straight to the token, tile or sheet under the mouse without the dialog. `Alt+P` always shows the image to the players.
 
-Only tokens, actors, items and journal entries you may change count, and only tokens you can see on the canvas. On Foundry v14 that is the level you are viewing. Tokens on top of a tile win. While the tile controls are active, tiles win instead. Tiles that cover half of the scene or more, such as overlays and roofs, only count while the tile controls are active, so they do not catch every drop meant for an empty spot. Sheets you can only look at, and sheets from locked compendiums, keep the usual dialog. Portraits and item images only take images, so a video dropped onto an actor or item sheet gets your usual target.
+Only tokens, actors, items and journal entries you may change count, and only tokens you can see on the canvas. On Foundry v14 that is the level you are viewing. Tokens win over map pins, and map pins win over tiles. While the tile controls are active, tiles win first. While the notes controls are active, map pins win first. Tiles that cover half of the scene or more, such as overlays and roofs, only count while the tile controls are active, so they do not catch every drop meant for an empty spot. Sheets you can only look at, and sheets from locked compendiums, keep the usual dialog. Portraits and item images only take images, so a video dropped onto an actor or item sheet gets your usual target.
 
 Several images at once always get the dialog for several images.
 
@@ -140,6 +141,27 @@ A map pin creates a journal entry with the image page and places a pin on the cu
 
 The new journal entry has the default permissions, so players only see the pin's page once you share the entry with them.
 
+## Bridges to other Sephral modules
+
+Where a picture fits another of Sephral’s modules that is active in the world, the dialog offers that directly. Without the other module nothing new shows up, and none of this ever opens a window by itself. The bridges are for the GM.
+
+### Map pin pictures
+
+Drop or paste an image onto a map pin on the canvas (a core map note, which is also what Sephral’s Map Pins draws) and the pin takes it as its picture. The pin keeps its place, text and journal link. The upload goes the same way as for tokens and tiles: the same folder, the same size and WebP choices, and a copied image address is not offered, because the canvas needs a copy of the file. Pins draw their picture in a square, so the dialog offers *Cut to a square* for pictures that are not square. A video does not work as a pin picture. The change can be undone like the picture of a token (see [Picture back](#picture-back)).
+
+### Token Wardrobe: a picture as a new outfit
+
+With Sephral’s Token Wardrobe active, the dialog for a picture dropped onto a token (or pasted with tokens selected, or dropped onto an actor sheet) has two more targets:
+
+* *Add as a new outfit of …*: the picture becomes an outfit of the actor with the picture as portrait and as token image. Nothing is put on.
+* *Add as a new outfit and put it on*: the same, and the token (or the actor) wears it right away.
+
+The name from the dialog is the name of the outfit. Without a typed name the outfit is called *Outfit 1*, *Outfit 2* and so on. A video becomes the token image only. Cut to a square, removing the background and the frame work as for token pictures. For an unlinked token the outfit goes to the world actor behind it, as Token Wardrobe keeps its outfits there. These targets are never the target the dialog starts with, and they are not part of the settings of the default target. An added outfit is not covered by *Undo*, delete it in the wardrobe window.
+
+### Handout Lens: shown pictures keep their size
+
+When you show a picture to the players with Handout Lens active, two things change. The picture is not shrunk by the setting *Maximum image size* (a scanned handout stays readable when zoomed in, the choice *Upload as WebP* in the dialog still counts). And Foundry only opens a shown picture for the players, so the picture opens in the lens for you as well, ready to zoom, point at details and lead the players’ view.
+
 ## Tokens and portraits
 
 The token target changes the image of every selected token, or of the token the image was dropped onto. The row *Change* decides what else gets the picture:
@@ -176,7 +198,9 @@ The chat target posts the image as a chat message from your current speaker. "Vi
 
 ## Showing images to players
 
-The share target and the "Also show this image to players afterwards" option show the image in a window on the screens of connected players. Under "Show to" you can check single players. With nobody checked, all connected players see it. Players who are offline do not get the image later.
+With Sephral’s Handout Lens active the picture also opens in the lens for you and keeps its size, see [Bridges to other Sephral modules](#bridges-to-other-sephral-modules).
+
+The share target and the "Also show this image to players afterwards" option show the image in a window on the screens of connected players. Under "Show to" you can check single players. With nobody checked, all connected players see it. Without Handout Lens, players who are offline do not get the image later. With Handout Lens active, players who join later still get the last shown picture.
 
 ## Image links
 
@@ -194,7 +218,7 @@ Pasted images and tiles scaled to fit the scene are centered on the scene. A til
 
 ## Picture back
 
-Replacing the picture of a token, tile, actor portrait or item can be undone with one click:
+Replacing the picture of a token, tile, map pin, actor portrait or item can be undone with one click:
 
 * The success message has an *Undo* link while it is shown.
 * The token HUD and the tile HUD get a *Previous picture* button, the header of an actor or item sheet gets a *Previous picture* entry. They appear as long as a replacement of this session can be undone.
@@ -313,6 +337,7 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * how often an image goes to the token, tile or sheet it was dropped or pasted onto, and how often the drop indicator appears
 * how often a printed grid is found on a map or not found, how often a grid is measured by hand, how many scenes get a grid fitted to the map, how many keep the found grid unchanged, how many get another grid after one was found (typed, measured or another grid type) and how many get a hexagon grid
 * how often a background is removed from a picture, and how often a frame is drawn into a token picture
+* how often an image becomes the picture of a map pin, a new outfit (also how often one is put on right away) and how often a shown picture is handled for Handout Lens
 * how often a replaced picture is put back, and how often *Upload as WebP* is ticked in the dialog while the setting is off
 * the settings *Dialog theme*, *Allow players to use SIPD*, *Save uploads as WebP*, *Show the drop target while dragging* and *Look for the grid on maps* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
@@ -324,6 +349,8 @@ No names, chat messages, notes, dice results or other content of the world are s
 `game.modules.get("sephrals-image-paste-drop").api.runSelfTest()` runs the self test (GM).
 
 `game.modules.get("sephrals-image-paste-drop").api.saveDebugFile()` saves the debug file (GM), see [Debug file](#debug-file).
+
+`game.modules.get("sephrals-image-paste-drop").api.samples()` lists sample windows: the import dialogs (new scene with the grid from the file name, a found printed grid, no grid found, token and portrait pictures with background removal, square cut and frames, linked pictures, several pictures at once) and the hints, over pictures made up in memory. A sample uploads nothing, creates and changes nothing and saves no setting, Insert only says that it does nothing. Translators and testers use them to see every text without pasting a picture first.
 
 ## Where images are stored
 

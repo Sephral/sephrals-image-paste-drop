@@ -142,7 +142,7 @@ test("registers all settings on init and event listeners on ready", async () => 
 
 test("action and theme choice helpers expose localized maps", () => {
   const actionChoices = __test__.getAllActionChoices();
-  assert.equal(actionChoices.length, 16);
+  assert.equal(actionChoices.length, 19);
   // Targets that only exist for a drop onto their document cannot be the default target
   for ( const action of __test__.CONTEXT_ACTIONS ) assert.equal(__test__.getActionSettingChoices()[action], undefined);
   assert.equal(Object.keys(__test__.getActionSettingChoices()).length, 13);

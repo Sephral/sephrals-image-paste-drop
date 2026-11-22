@@ -399,3 +399,160 @@ test("the tip only comes for users who can drop onto something, and not after it
   enablePlayerTargets(ACTIONS.TOKEN_IMAGE);
   assert.equal(__test__.showDropTip(), null);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Bridges to other Sephral modules
+// ---------------------------------------------------------------------------------------------------------------------
+
+function setModules(modules) {
+  globalThis.game.modules = { get: (id) => modules[id] };
+}
+
+function wardrobe({ withAdd = false } = {}) {
+  const calls = { wear: [] };
+  const api = {
+    outfits: () => [],
+    wear: async (target, id) => {
+      calls.wear.push({ target, id });
+      return {};
+    }
+  };
+  if ( withAdd ) api.addOutfit = async (actor, entry) => ({ id: "from-api", label: entry.label, actor: actor.id });
+  return { module: { active: true, api }, calls };
+}
+
+for ( const [key, value] of [
+  ["SIPD.Action.NoteImageOf", "Use as picture of the map pin {name}"],
+  ["SIPD.Action.AddOutfitOf", "Add as a new outfit of {name}"],
+  ["SIPD.Drop.NoteFallback", "Map pin"],
+  ["SIPD.Outfit.Fallback", "Outfit"],
+  ["SIPD.DefaultName", "Clipboard Image"],
+  ["SIPD.Notification.OutfitAdded", "Added '{label}' to {name}"],
+  ["SIPD.Notification.OutfitWorn", "{name} wears '{label}'"]
+] ) env.state.localizations.set(key, value);
+
+test("bridge targets exist only while the partner module is active with its functions", () => {
+  setModules({});
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.ADD_OUTFIT), false);
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.SHARE_IMAGE), true);
+  assert.equal(__test__.getPermittedActions().includes(ACTIONS.ADD_OUTFIT), false);
+  assert.equal(__test__.getPermittedActions().includes(ACTIONS.WEAR_OUTFIT), false);
+  assert.equal(__test__.getActionChoices().some((choice) => __test__.BRIDGE_ACTIONS[choice.value]), false);
+
+  const { module } = wardrobe();
+  setModules({ "sephrals-token-wardrobe": { ...module, active: false } });
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.ADD_OUTFIT), false);
+  setModules({ "sephrals-token-wardrobe": { active: true, api: { outfits() {} } } });
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.ADD_OUTFIT), false, "a wardrobe without wear is no partner");
+
+  setModules({ "sephrals-token-wardrobe": module });
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.ADD_OUTFIT), true);
+  assert.equal(__test__.getPermittedActions().includes(ACTIONS.WEAR_OUTFIT), true);
+  // never a default target, never for players
+  assert.equal(__test__.getActionSettingChoices()[ACTIONS.ADD_OUTFIT], undefined);
+  assert.equal(__test__.PLAYER_SELECTABLE_ACTIONS.includes(ACTIONS.ADD_OUTFIT), false);
+  enablePlayerTargets(ACTIONS.TOKEN_IMAGE);
+  assert.equal(__test__.isBridgeAvailable(ACTIONS.ADD_OUTFIT), false);
+});
+
+test("a token drop offers a new outfit of its world actor, selected tokens do too", async () => {
+  const { module, calls } = wardrobe();
+  setModules({ "sephrals-token-wardrobe": module });
+  const { actor, tokenDoc, board } = createBoard();
+  tokenDoc.actorId = actor.id;
+  globalThis.game.actors = { get: (id) => (id === actor.id ? actor : null) };
+  let counter = 0;
+  globalThis.foundry.utils.randomID = () => `id${++counter}`;
+
+  const context = __test__.resolveContextAt({ x: 150, y: 150, target: board });
+  // the outfit is never what a drop starts with
+  assert.equal(context.action, ACTIONS.TOKEN_IMAGE);
+  const choice = __test__.getActionChoices({ context }).find((entry) => entry.value === ACTIONS.ADD_OUTFIT);
+  assert.equal(choice.label, "Add as a new outfit of Hero");
+  assert.equal(choice.disabled, false);
+  assert.equal(__test__.getOutfitTargets(context)[0].actor, actor);
+  assert.equal(__test__.getOutfitTargets(context)[0].target, tokenDoc);
+
+  // without a token to take, the target is unavailable
+  assert.equal(__test__.isActionAvailable(ACTIONS.ADD_OUTFIT, null), false);
+  env.canvas.tokens.controlled = [env.canvas.tokens.placeables[0]];
+  assert.equal(__test__.isActionAvailable(ACTIONS.ADD_OUTFIT, null), true);
+
+  // add: the wardrobe flag gets the new outfit at the end, nothing is put on
+  module.api.outfits = () => [{ id: "street", label: "Street", portrait: "s.png", token: "s.png" }];
+  await __test__.executeAction({ action: ACTIONS.ADD_OUTFIT, path: "new.webp", name: "Clipboard Image-2026-11-21", context, video: false });
+  const written = actor.updates.at(-1)["flags.sephrals-token-wardrobe.outfits"];
+  assert.equal(written.length, 2);
+  assert.deepEqual(written[0], { id: "street", label: "Street", portrait: "s.png", token: "s.png" });
+  assert.equal(written[1].label, "Outfit 2");
+  assert.equal(written[1].portrait, "new.webp");
+  assert.equal(written[1].token, "new.webp");
+  assert.ok(written[1].id);
+  assert.equal(calls.wear.length, 0);
+
+  // add and put on: wear is called for the token with the new id, a typed name stays, a video is only the token image
+  await __test__.executeAction({ action: ACTIONS.WEAR_OUTFIT, path: "coat.webm", name: "Winter coat", context, video: true });
+  const second = actor.updates.at(-1)["flags.sephrals-token-wardrobe.outfits"];
+  assert.equal(second.at(-1).label, "Winter coat");
+  assert.equal(second.at(-1).portrait, "");
+  assert.equal(second.at(-1).token, "coat.webm");
+  assert.equal(calls.wear.length, 1);
+  assert.equal(calls.wear[0].target, tokenDoc);
+  assert.equal(calls.wear[0].id, second.at(-1).id);
+});
+
+test("a later addOutfit of the wardrobe is used and nothing is written into its flags", async () => {
+  const { module, calls } = wardrobe({ withAdd: true });
+  setModules({ "sephrals-token-wardrobe": module });
+  const sheetActor = createDoc("Actor", "Mira");
+  globalThis.game.actors = { get: () => sheetActor };
+  const context = { kind: "actor", document: sheetActor, name: "Mira" };
+  await __test__.addPictureAsOutfit({ name: "Look", path: "a.png", context }, { wear: true });
+  assert.deepEqual(sheetActor.updates, []);
+  assert.equal(calls.wear[0].id, "from-api");
+  assert.equal(calls.wear[0].target, sheetActor);
+});
+
+test("without selection, token or sheet the outfit target has nobody to change", async () => {
+  const { module } = wardrobe();
+  setModules({ "sephrals-token-wardrobe": module });
+  createBoard();
+  env.canvas.tokens.controlled = [];
+  assert.deepEqual(__test__.getOutfitTargets(null), []);
+  await assert.rejects(() => __test__.addPictureAsOutfit({ name: "x", path: "x.png", context: null }), /SIPD\.Error\.NoActor/);
+});
+
+test("map notes take a new picture in place, only for a GM", async () => {
+  const noteDoc = createDoc("Note", "", { text: "Inn", texture: { src: "icons/svg/book.svg" }, elevation: 0, sort: 0 });
+  const { board } = createBoard({ tileBounds: rect(900, 900, 50, 50) });
+  env.canvas.notes = { placeables: [{ document: noteDoc, visible: true, bounds: rect(300, 300, 40, 40) }], active: false };
+  const context = __test__.resolveContextAt({ x: 320, y: 320, target: board });
+  assert.equal(context.kind, "note");
+  assert.equal(context.action, ACTIONS.NOTE_IMAGE);
+  assert.equal(context.name, "Inn");
+  assert.equal(__test__.getActionChoices({ context }).find((entry) => entry.value === ACTIONS.NOTE_IMAGE).label, "Use as picture of the map pin Inn");
+  // a map pin icon takes no video
+  assert.equal(__test__.resolveContextAt({ x: 320, y: 320, target: board }, { media: { video: true } }).kind, "canvas");
+  // the square cut is offered, the frame and the token scope are not
+  const behavior = __test__.getActionBehavior(ACTIONS.NOTE_IMAGE);
+  assert.equal(behavior.supportsSquareCrop, true);
+  assert.equal(behavior.supportsFrame, false);
+  assert.equal(behavior.supportsPrototypeToken, false);
+
+  await __test__.executeAction({ action: ACTIONS.NOTE_IMAGE, path: "inn.webp", name: "x", context });
+  assert.deepEqual(noteDoc.updates, [{ "texture.src": "inn.webp" }]);
+  await assert.rejects(() => __test__.replaceNoteImage({ path: "x.png", context: null }), /SIPD\.Error\.NoTarget/);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.NOTE_IMAGE }).action, ACTIONS.PREVIEW_ONLY);
+  assert.equal(__test__.normalizeActionDecision({ action: ACTIONS.NOTE_IMAGE, squareCrop: true }, { context }).squareCrop, true);
+
+  // a note on top of a tile wins, a token on top of a note wins
+  env.canvas.notes.placeables[0].bounds = rect(910, 910, 20, 20);
+  assert.equal(__test__.resolveContextAt({ x: 915, y: 915, target: board }).kind, "note");
+  env.canvas.notes.placeables[0].bounds = rect(120, 120, 20, 20);
+  assert.equal(__test__.resolveContextAt({ x: 130, y: 130, target: board }).kind, "token");
+
+  // players never reach a note
+  enablePlayerTargets(ACTIONS.TOKEN_IMAGE);
+  assert.equal(__test__.resolveContextAt({ x: 320, y: 320, target: board }).kind, "canvas");
+  delete env.canvas.notes;
+});

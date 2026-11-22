@@ -48,6 +48,7 @@ import {
 import {findGrid, fitGridAt} from "./grid-fit.js";
 import {bindMeasure, describeGrid, drawGridOverlay, guessCellCount, isGridSource} from "./grid-tools.js";
 import {sha256Hex} from "./sha256.js";
+import {openSampleDialog, sampleWindows} from "./sample-windows.js";
 import {createUndoJournal, describeChange} from "./undo-journal.js";
 import {FIRST_HINT_STATES, shouldShowFirstHint, stateAfterImport} from "./first-hint.js";
 import {
@@ -82,6 +83,16 @@ import {DropIndicator} from "./drop-indicator.js";
 import {countFeature, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
 import {partnerHint, registerHubModule} from "./hub.mjs";
+import {
+  LENS_ID,
+  WARDROBE_ID,
+  appendOutfit,
+  buildOutfitEntry,
+  hasApi,
+  keepsFullSize,
+  noteName,
+  outfitLabel
+} from "./bridges.js";
 
 const MODULE_ID = "sephrals-image-paste-drop";
 const STORAGE_ROOT = "clipboard-images";
@@ -144,6 +155,9 @@ const ACTIONS = {
   TILE_CENTERED: "tile-centered",
   TILE_FIT: "tile-fit",
   TILE_IMAGE: "tile-image",
+  NOTE_IMAGE: "note-image",
+  ADD_OUTFIT: "add-outfit",
+  WEAR_OUTFIT: "wear-outfit",
   JOURNAL_IMAGE: "journal-image",
   JOURNAL_PAGE: "journal-page",
   MAP_PIN: "map-pin",
@@ -159,9 +173,16 @@ const ACTIONS = {
 // for such a drop, and they cannot be the default target.
 const CONTEXT_ACTIONS = Object.freeze([
   ACTIONS.TILE_IMAGE,
+  ACTIONS.NOTE_IMAGE,
   ACTIONS.ITEM_IMAGE,
   ACTIONS.JOURNAL_PAGE
 ]);
+// Targets that bridge to another Sephral module. They only exist while that module is active and offers what the bridge
+// needs, and they stay GM-only. They are never a default target.
+const BRIDGE_ACTIONS = Object.freeze({
+  [ACTIONS.ADD_OUTFIT]: {module: WARDROBE_ID, api: ["outfits", "wear"]},
+  [ACTIONS.WEAR_OUTFIT]: {module: WARDROBE_ID, api: ["outfits", "wear"]}
+});
 // Targets for several images at once that have no single-image counterpart
 const BATCH_ACTIONS = {
   JOURNAL_PAGES: "batch-journal-pages",
@@ -214,6 +235,9 @@ const TARGET_USAGE_FEATURES = Object.freeze({
   [ACTIONS.TILE_CENTERED]: "tileImage",
   [ACTIONS.TILE_FIT]: "tileImage",
   [ACTIONS.TILE_IMAGE]: "tileImage",
+  [ACTIONS.NOTE_IMAGE]: "notePicture",
+  [ACTIONS.ADD_OUTFIT]: "outfitAdded",
+  [ACTIONS.WEAR_OUTFIT]: "outfitWorn",
   [BATCH_ACTIONS.TILE_GRID]: "tileImage",
   [ACTIONS.JOURNAL_IMAGE]: "journalImage",
   [ACTIONS.JOURNAL_PAGE]: "journalImage",
@@ -226,7 +250,8 @@ const TARGET_USAGE_FEATURES = Object.freeze({
   [ACTIONS.SHARE_IMAGE]: "showToPlayers"
 });
 // Portraits and item images only take images. Foundry draws scenes, tiles and tokens from a video as well.
-const IMAGE_ONLY_ACTIONS = Object.freeze([ACTIONS.ACTOR_PORTRAIT, ACTIONS.ITEM_IMAGE]);
+// A map note draws its picture as an icon, which takes no video.
+const IMAGE_ONLY_ACTIONS = Object.freeze([ACTIONS.ACTOR_PORTRAIT, ACTIONS.ITEM_IMAGE, ACTIONS.NOTE_IMAGE]);
 const IMAGE_URL_EXTENSIONS = Object.freeze(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"]);
 const MEDIA_URL_EXTENSIONS = Object.freeze([...IMAGE_URL_EXTENSIONS, ...VIDEO_FILE_EXTENSIONS]);
 // The video formats Foundry plays, with the extension an upload gets
@@ -281,11 +306,14 @@ function getAllActionChoices() {
     {value: ACTIONS.TILE_CENTERED, label: localize("SIPD.Action.TileCentered")},
     {value: ACTIONS.TILE_FIT, label: localize("SIPD.Action.TileFit")},
     {value: ACTIONS.TILE_IMAGE, label: localize("SIPD.Action.TileImage")},
+    {value: ACTIONS.NOTE_IMAGE, label: localize("SIPD.Action.NoteImage")},
     {value: ACTIONS.JOURNAL_IMAGE, label: localize("SIPD.Action.JournalImage")},
     {value: ACTIONS.JOURNAL_PAGE, label: localize("SIPD.Action.JournalPage")},
     {value: ACTIONS.MAP_PIN, label: localize("SIPD.Action.MapPin")},
     {value: ACTIONS.TOKEN_IMAGE, label: localize("SIPD.Action.TokenImage")},
     {value: ACTIONS.ACTOR_PORTRAIT, label: localize("SIPD.Action.ActorPortrait")},
+    {value: ACTIONS.ADD_OUTFIT, label: localize("SIPD.Action.AddOutfit")},
+    {value: ACTIONS.WEAR_OUTFIT, label: localize("SIPD.Action.WearOutfit")},
     {value: ACTIONS.ITEM_IMAGE, label: localize("SIPD.Action.ItemImage")},
     {value: ACTIONS.CHAT_IMAGE, label: localize("SIPD.Action.ChatImage")},
     {value: ACTIONS.UPLOAD_DIRECTORY, label: localize("SIPD.Action.UploadDirectory")},
@@ -297,7 +325,7 @@ function getAllActionChoices() {
 // Targets that only exist for a drop onto their document cannot be the default target
 function getActionSettingChoices() {
   return Object.fromEntries(getAllActionChoices()
-    .filter(choice => !CONTEXT_ACTIONS.includes(choice.value))
+    .filter(choice => !CONTEXT_ACTIONS.includes(choice.value) && !BRIDGE_ACTIONS[choice.value])
     .map(choice => [choice.value, choice.label]));
 }
 
@@ -688,7 +716,8 @@ Hooks.once("init", () => {
   registerUsage(MODULE_ID, {
     features: ["imagePaste", "imageDrop", "batchImport", "sceneImage", "tileImage", "journalImage", "tokenImage", "showToPlayers",
       "contextImport", "itemImage", "dropIndicator", "gridFound", "gridNotFound", "gridMeasured", "gridKept", "gridChanged", "gridFitted", "hexScene",
-      "imageRestored", "webpChosen", "backgroundRemoved", "frameAdded"],
+      "imageRestored", "webpChosen", "backgroundRemoved", "frameAdded",
+      "notePicture", "outfitAdded", "outfitWorn", "lensShare"],
     settings: [UI_THEME_SETTING, ALLOW_PLAYER_TOOL_SETTING, CONVERT_WEBP_SETTING, DROP_INDICATOR_SETTING, AUTO_GRID_SETTING]
   });
 
@@ -750,7 +779,9 @@ Hooks.once("ready", () => {
     restorePreviousPicture: uuid => (uuid ? restorePictureOf(uuid) : restoreLastPicture()),
     hasPreviousPicture: uuid => Boolean(uuid ? UNDO_JOURNAL.latestFor(uuid) : UNDO_JOURNAL.latest()),
     // One file for all of Sephral's modules, without a message id about their latest picture
-    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
+    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID}),
+    // The windows of the module over made-up pictures, nothing saved (translators, testing; see samples.mjs)
+    samples: () => sampleWindows(sampleInternals())
   };
   migrateTokenFrameSetting();
   void ensurePlayerStorageDirectories();
@@ -1104,9 +1135,17 @@ function canUserShareImages() {
 }
 
 function getPermittedActions() {
-  if ( game.user?.isGM ) return Object.values(ACTIONS);
+  if ( game.user?.isGM ) return Object.values(ACTIONS).filter(action => isBridgeAvailable(action));
   if ( !canCurrentUserUseTool() ) return [];
   return Object.values(ACTIONS).filter(action => canUserPerformAction(action));
+}
+
+// A bridge target is available while its partner module is active with the functions it needs, a normal target always.
+// Players never get one, they are not in the player whitelist.
+function isBridgeAvailable(action) {
+  const bridge = BRIDGE_ACTIONS[action];
+  if ( !bridge ) return true;
+  return Boolean(game.user?.isGM) && hasApi(game.modules?.get?.(bridge.module), bridge.api);
 }
 
 // Loads the image and runs the import. An image URL that cannot be downloaded may be used directly instead.
@@ -1179,8 +1218,10 @@ async function handleImportedImage(file, {dropPoint=null, quickTarget=null, cont
     if ( cutBackground && pixels?.backgroundSkipped ) {
       ui.notifications.info(localize(pixels.backgroundSkipped === "transparent" ? "SIPD.Notification.BackgroundTransparent" : "SIPD.Notification.BackgroundNotPlain"));
     }
+    // A picture for the players to read in Handout Lens keeps its size
+    const readable = keepsFullSize({lensActive: isLensActive(), sharing: (decision.action === ACTIONS.SHARE_IMAGE) || decision.shareToPlayers});
     const upload = needsUpload
-      ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize, webp: decision.webp})
+      ? await prepareUploadFile(source, sourceSize, {optimize: decision.optimize && !readable, webp: decision.webp})
       : {file: preparedFile, ...dimensions};
     const reusableUploadTarget = getReusableManagedUploadTarget(decision.action, upload.file);
     const path = needsUpload
@@ -1486,7 +1527,12 @@ function takeArmedQuickTarget() {
   return target;
 }
 
+// A sample window shows the shrinking and format texts although the world does not use them: this holds its options
+// while the sample builds its dialog (see sampleInternals)
+let SAMPLE_OPTIMIZATION = null;
+
 function getImageOptimizationOptions() {
+  if ( SAMPLE_OPTIMIZATION ) return {...SAMPLE_OPTIMIZATION};
   return {
     maxSize: Number(getRegisteredSettingValue(MAX_IMAGE_SIZE_SETTING, 0)) || 0,
     webp: Boolean(getRegisteredSettingValue(CONVERT_WEBP_SETTING, false)),
@@ -1628,7 +1674,7 @@ async function handleRemoteImageUrl(url, {dropPoint=null, quickTarget=null, cont
   });
 }
 
-async function confirmRemoteImageUrl(url) {
+async function confirmRemoteImageUrl(url, {sample=null}={}) {
   const theme = getUITheme();
   const useUrlLabel = localize("SIPD.UrlFallback.UseUrl");
   const content = `
@@ -1643,7 +1689,7 @@ async function confirmRemoteImageUrl(url) {
     </div>
   `;
 
-  const result = await foundry.applications.api.DialogV2.wait({
+  const config = {
     rejectClose: false,
     window: {title: localize("SIPD.UrlFallback.Title")},
     content,
@@ -1665,7 +1711,9 @@ async function confirmRemoteImageUrl(url) {
         label: localize("SIPD.Dialog.Cancel")
       }
     ]
-  });
+  };
+  if ( sample ) return openSampleDialog(config, sample);
+  const result = await foundry.applications.api.DialogV2.wait(config);
   return result === true;
 }
 
@@ -1736,10 +1784,10 @@ function normalizeActionDecision(decision, {remoteUrl=false, video=false, contex
     recipients: sharing ? normalizeRecipientIds(decision.recipients, getAllUserIds()) : [],
     prototypeToken: behavior.supportsPrototypeToken && (tokenScope !== TOKEN_SCOPES.TOKEN),
     tokenScope,
-    squareCrop: behavior.supportsPrototypeToken && !video && Boolean(decision.squareCrop),
+    squareCrop: behavior.supportsSquareCrop && !video && Boolean(decision.squareCrop),
     removeBackground: !video && PIXEL_ACTIONS.includes(action) && Boolean(decision.removeBackground),
     backgroundTolerance: normalizeTolerance(decision.backgroundTolerance),
-    frame: normalizeFrameChoice(decision.frame, behavior.supportsPrototypeToken && !video),
+    frame: normalizeFrameChoice(decision.frame, behavior.supportsFrame && !video),
     gridSource: behavior.supportsGrid ? (decision.gridSource ?? null) : null,
     chatMode: (behavior.supportsChatMode && (decision.chatMode === CHAT_MODES.PUBLIC)) ? CHAT_MODES.PUBLIC : CHAT_MODES.CURRENT,
     optimize: readOptimizeChoice(decision),
@@ -1999,7 +2047,7 @@ async function readVideoDimensions(src) {
 }
 
 async function promptForAction({previewUrl, defaultName, width, height, remoteUrl=false, optimizePlan=null, sourceType=null,
-  video=false, grid=null, context=null, gridTools=null, webpTools=null, pixelTools=null}) {
+  video=false, grid=null, context=null, gridTools=null, webpTools=null, pixelTools=null, sample=null}) {
   const defaults = getDialogDefaults({remoteUrl, video, context});
   const importWindowState = getSavedWindowState(WINDOW_KEYS.IMPORT, {width: IMPORT_WINDOW_WIDTH});
   const optimizeDescription = remoteUrl ? null : describeOptimizationPlan(optimizePlan, sourceType);
@@ -2120,7 +2168,7 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
     </div>
   `;
 
-  return foundry.applications.api.DialogV2.wait({
+  const config = {
     rejectClose: false,
     window: {
       title: localize("SIPD.Dialog.Title"),
@@ -2167,7 +2215,9 @@ async function promptForAction({previewUrl, defaultName, width, height, remoteUr
         label: localize("SIPD.Dialog.Cancel")
       }
     ]
-  });
+  };
+  // A sample window shows the same dialog over made-up pictures: not modal, Insert does nothing
+  return sample ? openSampleDialog(config, sample) : foundry.applications.api.DialogV2.wait(config);
 }
 
 // What a token picture changes. The last choice is preselected, the setting can hide the question.
@@ -2552,7 +2602,7 @@ function readGridChoice(form) {
 
 // The grid search of a picture for the dialog or a shortcut. The search runs once, the buttons run it again or fit a
 // measured size. `enabled` shows the buttons, `auto` searches by itself.
-function createGridTools(file, dimensions) {
+function createGridTools(file, dimensions, {count=true}={}) {
   if ( !canUserPerformAction(ACTIONS.SCENE_BACKGROUND) || (typeof globalThis.createImageBitmap !== "function") ) return null;
   let auto = true;
   try {
@@ -2568,8 +2618,8 @@ function createGridTools(file, dimensions) {
       console.warn(`${MODULE_ID} | Grid search failed`, error);
       result = {found: false, reason: "unreadable"};
     }
-    if ( result.found ) countFeature(MODULE_ID, "gridFound");
-    else if ( result.reason === "noGrid" ) countFeature(MODULE_ID, "gridNotFound");
+    if ( count && result.found ) countFeature(MODULE_ID, "gridFound");
+    else if ( count && (result.reason === "noGrid") ) countFeature(MODULE_ID, "gridNotFound");
     return result;
   };
   let pending = null;
@@ -2747,7 +2797,7 @@ function bindGridFields(form, {width, height, gridTools=null, previewImage=null}
     if ( fitted?.found && (gridFamily(fitted.grid.type, types) === gridFamily(type, types)) ) result = {...fitted.grid, type: fitted.grid.type};
     toolsRow?.classList?.remove("is-missing");
     apply(result, "measured");
-    countFeature(MODULE_ID, "gridMeasured");
+    if ( !form.closest?.(".sephral-sample") ) countFeature(MODULE_ID, "gridMeasured");
   });
   if ( previewImage ) {
     previewImage.addEventListener?.("load", redrawOverlay);
@@ -2827,11 +2877,12 @@ function isActionAvailable(action, context=null) {
   if ( SCENE_ACTIONS.includes(action) ) return hasCanvasScene();
   if ( action === ACTIONS.TOKEN_IMAGE ) return getEligibleTokens(context).length > 0;
   if ( action === ACTIONS.ACTOR_PORTRAIT ) return getEligibleActors(context).length > 0;
+  if ( BRIDGE_ACTIONS[action] ) return isBridgeAvailable(action) && getOutfitTargets(context).length > 0;
   return true;
 }
 
 // The targets that take the background out and the one that gets a frame
-const PIXEL_ACTIONS = Object.freeze([ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT]);
+const PIXEL_ACTIONS = Object.freeze([ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT, ACTIONS.ADD_OUTFIT, ACTIONS.WEAR_OUTFIT]);
 
 const NO_ACTION_OPTIONS = Object.freeze({
   supportsShareToPlayers: false,
@@ -2840,6 +2891,8 @@ const NO_ACTION_OPTIONS = Object.freeze({
   supportsUploadDirectory: false,
   supportsRecipients: false,
   supportsPrototypeToken: false,
+  supportsSquareCrop: false,
+  supportsFrame: false,
   supportsChatMode: false,
   supportsGrid: false
 });
@@ -2874,7 +2927,22 @@ function getActionBehavior(action) {
     case ACTIONS.TOKEN_IMAGE:
       return {
         ...NO_ACTION_OPTIONS,
-        supportsPrototypeToken: true
+        supportsPrototypeToken: true,
+        supportsSquareCrop: true,
+        supportsFrame: true
+      };
+    case ACTIONS.ADD_OUTFIT:
+    case ACTIONS.WEAR_OUTFIT:
+      return {
+        ...NO_ACTION_OPTIONS,
+        supportsSquareCrop: true,
+        supportsFrame: true
+      };
+    case ACTIONS.NOTE_IMAGE:
+      // A map pin draws its picture in a square, so a square cut keeps it from being squeezed. GM only, nothing is shared.
+      return {
+        ...NO_ACTION_OPTIONS,
+        supportsSquareCrop: true
       };
     case ACTIONS.CHAT_IMAGE:
       return {
@@ -2972,7 +3040,7 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     uploadDirectoryField.disabled = !showUploadDirectory;
 
     if ( tokenScopeField ) tokenScopeField.disabled = !behavior.supportsPrototypeToken;
-    if ( squareCropField ) squareCropField.disabled = !behavior.supportsPrototypeToken;
+    if ( squareCropField ) squareCropField.disabled = !behavior.supportsSquareCrop;
     if ( chatModeField ) chatModeField.disabled = !behavior.supportsChatMode;
 
     // Recipients apply to the share target and to the "also show" option once it is checked
@@ -2984,8 +3052,8 @@ function configureDialogForm(dialog, theme=getUITheme(), previewUrl=null, {width
     setRowVisible(optionRows.uploadDirectory, showUploadDirectory);
     setRowVisible(optionRows.recipients, canShare && (behavior.supportsRecipients || sharing));
     setRowVisible(optionRows.prototypeToken, behavior.supportsPrototypeToken && askForTokenScope());
-    setRowVisible(optionRows.squareCrop, behavior.supportsPrototypeToken);
-    pixelUi.refresh({background: PIXEL_ACTIONS.includes(actionField.value), frame: behavior.supportsPrototypeToken});
+    setRowVisible(optionRows.squareCrop, behavior.supportsSquareCrop);
+    pixelUi.refresh({background: PIXEL_ACTIONS.includes(actionField.value), frame: behavior.supportsFrame});
     setRowVisible(optionRows.chatMode, behavior.supportsChatMode);
     setRowVisible(optionRows.grid, behavior.supportsGrid);
     const uploads = requiresPersistentPath(actionField.value, sharing);
@@ -3132,7 +3200,7 @@ function applyWindowState(app, key, fallback={}) {
 }
 
 function queueWindowStateSave(app, key) {
-  if ( !game?.ready || !key ) return;
+  if ( !game?.ready || !key || app?.isSample ) return;
   const size = getApplicationSize(app);
   if ( !size ) return;
 
@@ -3143,7 +3211,7 @@ function queueWindowStateSave(app, key) {
 }
 
 async function persistWindowState(app, key, size=null) {
-  if ( !game?.ready || !key ) return;
+  if ( !game?.ready || !key || app?.isSample ) return;
   const resolvedSize = size ?? getApplicationSize(app);
   if ( !resolvedSize ) return;
   const states = foundry.utils.deepClone(getSavedWindowStates());
@@ -3293,6 +3361,7 @@ async function ensureDirectoryExists(filePicker, target) {
 }
 
 async function executeAction(data) {
+  let sharedInLens = false;
   switch ( data.action ) {
     case ACTIONS.SCENE_BACKGROUND:
       await createSceneFromImage(data);
@@ -3312,8 +3381,15 @@ async function executeAction(data) {
     case ACTIONS.TILE_IMAGE:
       await replaceTileImage(data);
       break;
+    case ACTIONS.NOTE_IMAGE:
+      await replaceNoteImage(data);
+      break;
     case ACTIONS.MAP_PIN:
       await createMapPinFromImage(data);
+      break;
+    case ACTIONS.ADD_OUTFIT:
+    case ACTIONS.WEAR_OUTFIT:
+      await addPictureAsOutfit(data, {wear: data.action === ACTIONS.WEAR_OUTFIT});
       break;
     case ACTIONS.TOKEN_IMAGE:
       await updateTokenImages(data);
@@ -3337,7 +3413,7 @@ async function executeAction(data) {
       ui.notifications.info(localize("SIPD.Notification.Uploaded", {path: data.path}));
       break;
     case ACTIONS.SHARE_IMAGE:
-      shareImageToPlayers(data.path, data.name, data.recipients);
+      sharedInLens = shareImageToPlayers(data.path, data.name, data.recipients);
       break;
     case ACTIONS.PREVIEW_ONLY:
       openImagePreview(data.path, data.name, {revokeOnClose: data.temporaryObjectUrl, video: Boolean(data.video)});
@@ -3347,9 +3423,10 @@ async function executeAction(data) {
   }
 
   if ( data.shareToPlayers && actionSupportsShareToPlayers(data.action) ) {
-    shareImageToPlayers(data.path, data.name, data.recipients);
+    sharedInLens = shareImageToPlayers(data.path, data.name, data.recipients) || sharedInLens;
   }
   countImportTarget(data.action);
+  if ( sharedInLens ) countFeature(MODULE_ID, "lensShare");
   markFirstUse();
   if ( actionTargetsContext(data.action, data.context) ) countFeature(MODULE_ID, "contextImport");
 }
@@ -3606,17 +3683,21 @@ function findCanvasHit(point) {
   };
   const tokens = entries(canvas.tokens?.placeables, doc => isGM || doc.isOwner);
   const tiles = canUserPerformAction(ACTIONS.TILE_IMAGE) ? entries(canvas.tiles?.placeables, () => true) : [];
+  const notes = canUserPerformAction(ACTIONS.NOTE_IMAGE) ? entries(canvas.notes?.placeables, () => true) : [];
   return pickCanvasHit(point, {
     tokens,
+    notes,
     tiles,
     sceneRect: canvas.dimensions?.sceneRect ?? null,
-    tilesLayerActive: Boolean(canvas.tiles?.active)
+    tilesLayerActive: Boolean(canvas.tiles?.active),
+    notesLayerActive: Boolean(canvas.notes?.active)
   });
 }
 
 function describePlaceableContext(kind, object) {
   const doc = object.document;
   if ( kind === CONTEXT_KINDS.TILE ) return {kind, document: doc, name: getTileName(doc), bounds: object.bounds};
+  if ( kind === CONTEXT_KINDS.NOTE ) return {kind, document: doc, name: noteName(doc, localize("SIPD.Drop.NoteFallback")), bounds: object.bounds};
   // Only a linked token shares its actor, so only then the portrait is the token's too
   const actor = object.actor ?? doc.actor ?? null;
   const ownsActor = actor && (game.user?.isGM || actor.isOwner);
@@ -3657,6 +3738,7 @@ function withContextAction(context, media=null) {
   const candidates = {
     [CONTEXT_KINDS.TOKEN]: [ACTIONS.TOKEN_IMAGE, ACTIONS.ACTOR_PORTRAIT],
     [CONTEXT_KINDS.TILE]: [ACTIONS.TILE_IMAGE],
+    [CONTEXT_KINDS.NOTE]: [ACTIONS.NOTE_IMAGE],
     [CONTEXT_KINDS.ACTOR]: [ACTIONS.ACTOR_PORTRAIT],
     [CONTEXT_KINDS.ITEM]: [ACTIONS.ITEM_IMAGE],
     [CONTEXT_KINDS.JOURNAL]: [ACTIONS.JOURNAL_PAGE]
@@ -3670,11 +3752,14 @@ function withContextAction(context, media=null) {
 function actionTargetsContext(action, context) {
   switch ( context?.kind ) {
     case CONTEXT_KINDS.TOKEN:
-      return (action === ACTIONS.TOKEN_IMAGE) || ((action === ACTIONS.ACTOR_PORTRAIT) && Boolean(context.actor));
+      return (action === ACTIONS.TOKEN_IMAGE) || ((action === ACTIONS.ACTOR_PORTRAIT) && Boolean(context.actor))
+        || Boolean(BRIDGE_ACTIONS[action]);
     case CONTEXT_KINDS.TILE:
       return action === ACTIONS.TILE_IMAGE;
+    case CONTEXT_KINDS.NOTE:
+      return action === ACTIONS.NOTE_IMAGE;
     case CONTEXT_KINDS.ACTOR:
-      return action === ACTIONS.ACTOR_PORTRAIT;
+      return (action === ACTIONS.ACTOR_PORTRAIT) || Boolean(BRIDGE_ACTIONS[action]);
     case CONTEXT_KINDS.ITEM:
       return action === ACTIONS.ITEM_IMAGE;
     case CONTEXT_KINDS.JOURNAL:
@@ -3689,10 +3774,14 @@ function getContextActionLabel(action, context) {
     [ACTIONS.TOKEN_IMAGE]: "SIPD.Action.TokenImageOf",
     [ACTIONS.ACTOR_PORTRAIT]: "SIPD.Action.ActorPortraitOf",
     [ACTIONS.TILE_IMAGE]: "SIPD.Action.TileImageOf",
+    [ACTIONS.NOTE_IMAGE]: "SIPD.Action.NoteImageOf",
+    [ACTIONS.ADD_OUTFIT]: "SIPD.Action.AddOutfitOf",
+    [ACTIONS.WEAR_OUTFIT]: "SIPD.Action.WearOutfitOf",
     [ACTIONS.ITEM_IMAGE]: "SIPD.Action.ItemImageOf",
     [ACTIONS.JOURNAL_PAGE]: "SIPD.Action.JournalPageOf"
   };
-  const name = (context?.kind === CONTEXT_KINDS.TOKEN) && (action === ACTIONS.ACTOR_PORTRAIT) ? context.actor?.name : context?.name;
+  let name = (context?.kind === CONTEXT_KINDS.TOKEN) && (action === ACTIONS.ACTOR_PORTRAIT) ? context.actor?.name : context?.name;
+  if ( BRIDGE_ACTIONS[action] ) name = getOutfitTargets(context)[0]?.actor?.name ?? name;
   return keys[action] ? localize(keys[action], {name: name ?? ""}) : action;
 }
 
@@ -3704,6 +3793,9 @@ const DROP_LABELS = Object.freeze({
   [ACTIONS.TILE_CENTERED]: {key: "SIPD.Drop.Target.Tile", icon: "fa-cube"},
   [ACTIONS.TILE_FIT]: {key: "SIPD.Drop.Target.TileFit", icon: "fa-expand"},
   [ACTIONS.TILE_IMAGE]: {key: "SIPD.Drop.Target.TileImage", icon: "fa-cubes"},
+  [ACTIONS.NOTE_IMAGE]: {key: "SIPD.Drop.Target.NoteImage", icon: "fa-map-pin"},
+  [ACTIONS.ADD_OUTFIT]: {key: "SIPD.Drop.Target.AddOutfit", icon: "fa-shirt"},
+  [ACTIONS.WEAR_OUTFIT]: {key: "SIPD.Drop.Target.WearOutfit", icon: "fa-shirt"},
   [ACTIONS.JOURNAL_IMAGE]: {key: "SIPD.Drop.Target.Journal", icon: "fa-book-open"},
   [ACTIONS.JOURNAL_PAGE]: {key: "SIPD.Drop.Target.JournalPage", icon: "fa-book-open"},
   [ACTIONS.MAP_PIN]: {key: "SIPD.Drop.Target.MapPin", icon: "fa-map-pin"},
@@ -3842,6 +3934,97 @@ function journalPageData({name, path}) {
     return {name, type: "video", src: path, title: {show: false}, video: {controls: true, loop: true, autoplay: true}};
   }
   return {name, type: "image", src: path, title: {show: false}};
+}
+
+// The note keeps its place and text, only its picture changes. Map Pins and the core note draw the same icon.
+async function replaceNoteImage({path, context}) {
+  const note = (context?.kind === CONTEXT_KINDS.NOTE) ? context.document : null;
+  if ( !note ) throw new Error(localize("SIPD.Error.NoTarget"));
+  const record = rememberPictures("note", [pictureChange(note, "texture.src", path)]);
+  await note.update({"texture.src": path});
+  notifyWithUndo(localize("SIPD.Notification.NoteUpdated", {name: context.name}), record);
+  return note;
+}
+
+/* -------------------------------------------- */
+/*  Bridges to other Sephral modules            */
+/* -------------------------------------------- */
+
+function isLensActive() {
+  return Boolean(game.modules?.get?.(LENS_ID)?.active);
+}
+
+// Who gets the outfit: the world actors behind the token dropped onto (or the selected tokens), else the actor of a
+// sheet or the user's character. Each one comes with what the wardrobe is told to put on: the token, else the actor.
+function getOutfitTargets(context=null) {
+  const isGM = Boolean(game.user?.isGM);
+  const targets = [];
+  for ( const token of getEligibleTokens(context) ) {
+    const doc = token.document;
+    const actor = (doc.actorId && game.actors?.get?.(doc.actorId)) || token.actor || doc.actor || null;
+    if ( actor && (isGM || actor.isOwner) ) targets.push({actor, target: doc});
+  }
+  if ( !targets.length ) {
+    for ( const entry of getEligibleActors(context) ) {
+      const actor = entry.isToken ? (game.actors?.get?.(entry.id) ?? entry) : entry;
+      targets.push({actor, target: actor});
+    }
+  }
+  return targets;
+}
+
+// The new outfit goes through Token Wardrobe's own `api.addOutfit` (validation, rights, hooks). That call comes with
+// Token Wardrobe 1.0.5. Older versions (1.0.4 and before) have no such function: then the outfit is appended to the
+// list their `api.outfits` hands out and written to the actor flags, their refresh hooks notice the change.
+async function addOutfitToActor(actor, {label, path, video}) {
+  const module = game.modules.get(WARDROBE_ID);
+  const entry = buildOutfitEntry({label, path, video});
+  const existing = module.api.outfits(actor);
+  const named = outfitLabel(label, {defaultName: localize("SIPD.DefaultName"), fallback: localize("SIPD.Outfit.Fallback"), existing});
+  if ( typeof module.api.addOutfit === "function" ) {
+    const outfit = await module.api.addOutfit(actor, {name: named, portrait: entry.portrait, token: entry.token});
+    if ( !outfit?.id ) throw new Error(localize("SIPD.Error.NoWardrobe"));
+    return {id: outfit.id, label: outfit.label ?? named};
+  }
+  const {id, outfits} = appendOutfit(existing, {...entry, label: named}, () => foundry.utils.randomID());
+  await actor.update({[`flags.${WARDROBE_ID}.outfits`]: outfits});
+  return {id, label: named};
+}
+
+// Put an outfit on: `api.wearOutfit` of Token Wardrobe 1.0.5 and later, else the older `api.wear`. False means it did not go on.
+async function wearAddedOutfit(module, target, outfitId) {
+  if ( typeof module.api.wearOutfit === "function" ) return module.api.wearOutfit(target, outfitId);
+  return Boolean(await module.api.wear(target, outfitId));
+}
+
+// The picture as a new outfit of the token's or the actor's wardrobe (portrait and token image), put on at once on request
+async function addPictureAsOutfit({name, path, context=null, video=false}, {wear=false}={}) {
+  const targets = getOutfitTargets(context);
+  if ( !targets.length ) throw new Error(localize("SIPD.Error.NoActor"));
+  if ( !isBridgeAvailable(wear ? ACTIONS.WEAR_OUTFIT : ACTIONS.ADD_OUTFIT) ) throw new Error(localize("SIPD.Error.NoWardrobe"));
+  const module = game.modules.get(WARDROBE_ID);
+  const added = new Map();
+  const failed = [];
+  for ( const {actor} of targets ) {
+    if ( added.has(actor.id) ) continue;
+    added.set(actor.id, await addOutfitToActor(actor, {label: name, path, video}));
+  }
+  if ( wear ) {
+    for ( const {actor, target} of targets ) {
+      try {
+        if ( !(await wearAddedOutfit(module, target, added.get(actor.id).id)) ) failed.push(target?.name ?? actor.name);
+      } catch (error) {
+        console.warn(`${MODULE_ID} | Token Wardrobe could not put on the outfit`, error);
+        failed.push(target?.name ?? actor.name);
+      }
+    }
+  }
+  const names = Array.from(added.keys(), id => game.actors.get(id)?.name ?? id).join(", ");
+  const label = Array.from(added.values())[0]?.label ?? name;
+  if ( failed.length ) ui.notifications.warn(localize("SIPD.Notification.OutfitWearFailed", {label, name: failed.join(", ")}));
+  const worn = wear && (failed.length < targets.length);
+  ui.notifications.info(localize(worn ? "SIPD.Notification.OutfitWorn" : "SIPD.Notification.OutfitAdded", {label, name: names}));
+  return added;
 }
 
 // A map pin: a journal entry with the image page and a note at the drop point (or the scene center).
@@ -4226,6 +4409,26 @@ function shareImageToPlayers(path, name, recipients=[]) {
   const journalCollection = foundry.documents.collections?.Journal ?? globalThis.Journal;
   const users = Array.isArray(recipients) ? recipients.filter(Boolean) : [];
   journalCollection.showImage(path, {title: name, showTitle: true, ...(users.length ? {users} : {})});
+  return openSharedInLens(path, name);
+}
+
+// Foundry opens a shown picture for the players only, the one who shows it sees nothing. With Handout Lens the picture
+// opens for them too, in the lens, so they can zoom, point and lead the players' view right away.
+function openSharedInLens(path, name) {
+  const lens = game.modules?.get?.(LENS_ID);
+  if ( !hasApi(lens, ["open"]) ) return false;
+  const ImagePopout = foundry.applications?.apps?.ImagePopout;
+  const open = Array.from(foundry.applications?.instances?.values?.() ?? []);
+  if ( ImagePopout && open.some(app => (app instanceof ImagePopout) && (app.options?.src === path)) ) return false;
+  try {
+    void Promise.resolve(lens.api.open({src: path, title: name, showTitle: true})).catch(error => {
+      console.warn(`${MODULE_ID} | Handout Lens could not open the picture`, error);
+    });
+    return true;
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Handout Lens could not open the picture`, error);
+    return false;
+  }
 }
 
 function openImagePreview(path, name, {revokeOnClose=null, video=false}={}) {
@@ -4328,7 +4531,7 @@ function batchOptimizeChoiceMarkup(items) {
   return optimizeChoiceMarkup(summary, {label, hint});
 }
 
-async function promptForBatchAction({items, defaultName}) {
+async function promptForBatchAction({items, defaultName, sample=null}) {
   const defaults = getBatchDialogDefaults();
   const windowState = getSavedWindowState(WINDOW_KEYS.BATCH, {width: BATCH_WINDOW_WIDTH});
   const actionOptions = getBatchActionChoices().map(({value, label, disabled}) => {
@@ -4422,7 +4625,7 @@ async function promptForBatchAction({items, defaultName}) {
     </div>
   `;
 
-  return foundry.applications.api.DialogV2.wait({
+  const config = {
     rejectClose: false,
     window: {
       title: localize("SIPD.Batch.Title"),
@@ -4452,7 +4655,8 @@ async function promptForBatchAction({items, defaultName}) {
         label: localize("SIPD.Dialog.Cancel")
       }
     ]
-  });
+  };
+  return sample ? openSampleDialog(config, sample) : foundry.applications.api.DialogV2.wait(config);
 }
 
 function configureBatchDialogForm(dialog, theme=getUITheme(), items=[]) {
@@ -4781,6 +4985,14 @@ function showDropTip() {
   if ( (typeof globalThis.document?.createElement !== "function") || !document.body ) return null;
   if ( document.querySelector(".sipd-drop-tip") ) return null;
 
+  const tip = buildDropTip({onDismiss: () => void game.settings.set(MODULE_ID, DROP_TIP_SETTING, true)});
+  document.body.append(tip);
+  return tip;
+}
+
+// The tip element for the current user. onDismiss runs when one of its buttons is used (the tip then fades out).
+function buildDropTip({onDismiss}={}) {
+  const isGM = Boolean(game.user?.isGM);
   const key = name => {
     try {
       return formatKeybinding(game.keybindings?.get?.(MODULE_ID, name)?.[0]);
@@ -4815,13 +5027,70 @@ function showDropTip() {
       data-tooltip="${escapeHtml(localize("SIPD.Tip.Close"))}"><i class="fa-solid fa-xmark"></i></button>`;
   for ( const button of tip.querySelectorAll("[data-action=dismiss]") ) {
     button.addEventListener("click", () => {
-      void game.settings.set(MODULE_ID, DROP_TIP_SETTING, true);
+      onDismiss?.();
       tip.classList.add("is-leaving");
       setTimeout(() => tip.remove(), 220);
     });
   }
-  document.body.append(tip);
   return tip;
+}
+
+/* -------------------------------------------- */
+/*  Sample windows                              */
+/* -------------------------------------------- */
+
+// What the sample windows (sample-windows.js) need of this file: the real dialogs, the tools they get and the
+// document helpers. Nothing here writes anything.
+function sampleInternals() {
+  // The import dialog over a picture held in memory, with the tools a real import prepares (WebP size, background
+  // and frame tools, grid search). A grid search of a sample does not count as a use.
+  const openImport = async (file, {key, context=null, video=false, remoteUrl=false, previewUrl=null, grid=null, searchGrid=false, planSize=null, name=null, prepare=null, optimize=null}) => {
+    SAMPLE_OPTIMIZATION = optimize;
+    try {
+    const url = previewUrl ?? URL.createObjectURL(file);
+    const dimensions = await readMediaDimensions(url, {video});
+    const optimizeSize = planSize ?? dimensions;
+    const optimizePlan = (video || remoteUrl) ? null : await getImageOptimizationPlan(file, optimizeSize, {...getImageOptimizationOptions(), webp: false});
+    const webpTools = (video || remoteUrl) ? null : await createWebpTools(file, dimensions);
+    const pixelTools = (video || remoteUrl) ? null : await createPixelTools(file);
+    const gridTools = (!video && !grid && searchGrid) ? createGridTools(file, dimensions, {count: false}) : null;
+    const dialog = await promptForAction({
+      previewUrl: url, defaultName: name ?? defaultDocumentName(), ...dimensions, remoteUrl, optimizePlan, sourceType: file.type, video,
+      grid, context, gridTools, webpTools, pixelTools, sample: {key, prepare}
+    });
+    if ( !previewUrl ) dialog.addEventListener("close", () => URL.revokeObjectURL(url), {once: true});
+    return dialog;
+    } finally {
+      SAMPLE_OPTIMIZATION = null;
+    }
+  };
+  return {
+    localize, escapeHtml, MODULE_ID, ACTIONS, CONTEXT_KINDS, openImport,
+    detectGridFromFileName, defaultDocumentName, readMediaDimensions, describeOptimizationPlan,
+    openBatch: async ({items, defaultName, key, prepare=null, optimize=null}) => {
+      SAMPLE_OPTIMIZATION = optimize;
+      try {
+        return await promptForBatchAction({items, defaultName, sample: {key, prepare}});
+      } finally {
+        SAMPLE_OPTIMIZATION = null;
+      }
+    },
+    openRemote: (url, key) => confirmRemoteImageUrl(url, {sample: {key}}),
+    getImageOptimizationPlan: (file, options) => getImageOptimizationPlan(file, {width: 6000, height: 4000}, {...options, webp: Boolean(options.webp)}),
+    hintText: () => localize("SIPD.Hint.First", {key: formatQuickKey("quickInsert")}),
+    buildDropTip,
+    theme: getUITheme,
+    // The labels next to the cursor for every target, the batch and the two hints under them
+    dropLabels: () => {
+      const hint = localize("SIPD.Drop.DialogHint");
+      const labels = Object.keys(DROP_LABELS).map(action => dropLabel(action, hint));
+      labels.push({icon: "fa-images", title: localize("SIPD.Drop.Batch", {count: 4}), detail: hint});
+      labels.push(dropLabel(ACTIONS.TILE_IMAGE, localize("SIPD.Drop.TileFallback")));
+      labels.push(dropLabel(ACTIONS.NOTE_IMAGE, localize("SIPD.Drop.NoteFallback")));
+      labels.push(dropLabel(ACTIONS.PREVIEW_ONLY, localize("SIPD.Drop.NoDialog")));
+      return labels;
+    }
+  };
 }
 
 // The menu button which runs the self-test. Foundry only accepts application classes as menus.
@@ -5086,6 +5355,12 @@ export const __test__ = {
   TESTED_VERSIONS,
   escapeHtml,
   CONTEXT_ACTIONS,
+  BRIDGE_ACTIONS,
+  isBridgeAvailable,
+  isLensActive,
+  getOutfitTargets,
+  addPictureAsOutfit,
+  replaceNoteImage,
   DROP_INDICATOR_SETTING,
   DROP_TIP_SETTING,
   acceptsDrag,

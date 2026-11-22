@@ -5,6 +5,7 @@
 const CONTEXT_KINDS = Object.freeze({
   TOKEN: "token",
   TILE: "tile",
+  NOTE: "note",
   ACTOR: "actor",
   ITEM: "item",
   JOURNAL: "journal",
@@ -57,15 +58,20 @@ function isLargeTile(bounds, sceneRect, share=LARGE_TILE_SHARE) {
   return (sceneArea > 0) && (rectArea(bounds) >= sceneArea * share);
 }
 
-// The token or tile a drop at a canvas point hits. Tokens come first, on the tiles layer tiles do. Large tiles only
-// count on the tiles layer. Entries: {bounds, elevation, sort, ...}.
-function pickCanvasHit(point, {tokens=[], tiles=[], sceneRect=null, tilesLayerActive=false}={}) {
+// The token, map note or tile a drop at a canvas point hits. Tokens come first, then notes (small pins on top of a
+// map), then tiles. On the tiles layer tiles come first, on the notes layer notes do. Large tiles only count on the
+// tiles layer. Entries: {bounds, elevation, sort, ...}.
+function pickCanvasHit(point, {tokens=[], notes=[], tiles=[], sceneRect=null, tilesLayerActive=false, notesLayerActive=false}={}) {
   const token = pickTopmost(tokens.filter(entry => rectContains(entry.bounds, point)));
+  const note = pickTopmost(notes.filter(entry => rectContains(entry.bounds, point)));
   const tile = pickTopmost(tiles.filter(entry => rectContains(entry.bounds, point)
     && (tilesLayerActive || !isLargeTile(entry.bounds, sceneRect))));
   const tokenHit = token ? {kind: CONTEXT_KINDS.TOKEN, entry: token} : null;
+  const noteHit = note ? {kind: CONTEXT_KINDS.NOTE, entry: note} : null;
   const tileHit = tile ? {kind: CONTEXT_KINDS.TILE, entry: tile} : null;
-  return tilesLayerActive ? (tileHit ?? tokenHit) : (tokenHit ?? tileHit);
+  if ( tilesLayerActive ) return tileHit ?? noteHit ?? tokenHit;
+  if ( notesLayerActive ) return noteHit ?? tokenHit ?? tileHit;
+  return tokenHit ?? noteHit ?? tileHit;
 }
 
 // What a drag carries, read during dragover when the files themselves cannot be read yet: the number of image and

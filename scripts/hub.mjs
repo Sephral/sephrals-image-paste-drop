@@ -15,8 +15,8 @@
  * or switched on. Only actions, never which module, and only where the GM agreed to the usage statistics.
  */
 
-export const HUB_LIB_VERSION = 4;
-export const CATALOG_REVISION = 2026112001;
+export const HUB_LIB_VERSION = 5;
+export const CATALOG_REVISION = 2026112202;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -52,12 +52,24 @@ const PROBLEM_LIMIT = 5;
  * video: false keeps the README demo video (media/demo.mp4 on GitHub) out of the window, for videos with AI made images
  * (Foundry's AI content policy) or content we may not show inside a package. released: false has a repository but no
  * release yet: its row gets manual and video, More from Sephral leaves it out. core: the lowest Foundry generation.
+ * supports lists only systems with real built in support (an adapter, a preset or a rule of its own), every module
+ * still works elsewhere. langs: the languages of its lang files, DEFAULT_LANGS when left out.
  */
+export const DEFAULT_LANGS = ["en", "de"];
+const SWIFT_DICE_SYSTEMS = ["dnd5e", "pf2e", "swade", "crucible", "daggerheart", "CoC7", "deltagreen", "wfrp4e", "dark-heresy",
+  "impmal", "brp", "mythras", "rqg", "dragonbane", "symbaroum", "cairn", "cyberpunk-red-core", "blades-in-the-dark", "alienrpg",
+  "forbidden-lands", "vaesen", "t2k4e", "blade-runner", "fate-core-official", "ModularFate", "fate", "pbta", "dungeonworld",
+  "cyphersystem", "gurps", "draw-steel", "shadowrun5e", "shadowrun6-eden"];
+// Only what is released: Daggerheart and Tormenta20 of Roll Breakdown and Roll Requests and Pathfinder 2e of Campaign
+// Album are built but not released yet, add them with a new CATALOG_REVISION in the release that ships them.
+const ROLL_SYSTEMS = ["crucible", "dnd5e", "pf2e", "sf2e", "swade"];
+const TOOLTIP_SYSTEMS = ["dnd5e", "pf2e", "swade", "crucible", "daggerheart", "CoC7", "shadowdark", "projectfu", "shadowrun6-eden",
+  "dolmenwood", "rqg"];
 const CATALOG = [
   { id: "sephrals-campaign-album", title: "Campaign Album", listed: true, supports: ["crucible", "dnd5e"],
     text: { en: "Crits, fallen bosses and level ups, photographed on their own.",
       de: "Kritische Treffer, gefallene Bosse und Stufenaufstiege, ganz von selbst fotografiert." } },
-  { id: "sephrals-combat-log-stats", title: "Combat Log & Stats", listed: true,
+  { id: "sephrals-combat-log-stats", title: "Combat Log & Stats", listed: true, supports: ["crucible", "dnd5e", "pf2e"],
     text: { en: "Every fight recorded round by round, with stats and recaps for the table.",
       de: "Jeder Kampf Runde für Runde aufgezeichnet, mit Statistik und Rückblick für die Runde." } },
   { id: "sephrals-content-backup-restore", title: "Content Backup & Restore", listed: true,
@@ -72,7 +84,7 @@ const CATALOG = [
   { id: "sephrals-handout-lens", title: "Handout Lens", listed: true,
     text: { en: "Zoom, pan and a reading lens for every picture you show your players.",
       de: "Zoomen, verschieben und eine Leselupe für jedes Bild, das du deinen Spielern zeigst." } },
-  { id: "sephrals-deep-tables", title: "Deep Tables", listed: false,
+  { id: "sephrals-deep-tables", title: "Deep Tables", listed: false, supports: ["crucible", "dnd5e", "swade"],
     text: { en: "Roll tables with a look first, ready tables in the box, rows that fit the moment and results that act.",
       de: "Würfeltabellen mit Vorschau, fertigen Tabellen zum Start, Zeilen passend zur Lage und Ergebnissen, die handeln." } },
   { id: "sephrals-file-commander", title: "File Commander", listed: true,
@@ -84,7 +96,10 @@ const CATALOG = [
   { id: "sephrals-image-paste-drop", title: "Image Paste & Drop", listed: true,
     text: { en: "Paste or drop an image and turn it into a scene, tile or journal page.",
       de: "Füg ein Bild ein oder zieh es herein und mach daraus eine Szene, ein Tile oder eine Journalseite." } },
-  { id: "sephrals-loot-ledger", title: "Loot Ledger", listed: true, supports: ["crucible", "dnd5e"],
+  { id: "sephrals-instant-replay", title: "Instant Replay", listed: false,
+    text: { en: "The last seconds of the battle map as a short clip in the chat, also in slow motion.",
+      de: "Die letzten Sekunden der Karte als kurzer Clip im Chat, auf Wunsch in Zeitlupe." } },
+  { id: "sephrals-loot-ledger", title: "Loot Ledger", listed: true, supports: ["crucible", "dnd5e", "pf2e"],
     text: { en: "A shared party inventory with a fair loot table and an open log.",
       de: "Ein gemeinsames Gruppeninventar mit fairer Beuteverteilung und offenem Protokoll." } },
   { id: "sephrals-lunar-almanac", title: "Lunar Almanac", listed: true, needs: "ember",
@@ -105,33 +120,39 @@ const CATALOG = [
   { id: "sephrals-player-notes", title: "Player Notes", listed: true,
     text: { en: "Private GM notes on every player character.",
       de: "Private Notizen der SL zu jedem Spielercharakter." } },
-  { id: "sephrals-roll-breakdown", title: "Roll Breakdown", listed: true,
+  { id: "sephrals-roll-breakdown", title: "Roll Breakdown", listed: true, supports: ROLL_SYSTEMS,
     text: { en: "Shows where every number of a roll comes from, right on the chat card.",
       de: "Zeigt direkt auf der Chatkarte, woher jede Zahl eines Wurfs kommt." } },
-  { id: "sephrals-roll-requests", title: "Roll Requests", listed: true, supports: ["crucible", "dnd5e", "pf2e", "swade"],
+  { id: "sephrals-roll-requests", title: "Roll Requests", listed: true, supports: ROLL_SYSTEMS,
     text: { en: "Ask any group for a check or save and get one live result card.",
       de: "Fordere Proben oder Rettungswürfe an und bekomm eine einzige Ergebniskarte." } },
-  { id: "sephrals-roll-triggers", title: "Roll Triggers", listed: true,
+  { id: "sephrals-roll-triggers", title: "Roll Triggers", listed: true, supports: ["dnd5e", "pf2e", "swade", "crucible"],
     text: { en: "Natural 20s, fumbles and doubles set off your house rules.",
       de: "Natürliche 20, Patzer und Paschs lösen eure Hausregeln aus." } },
   { id: "sephrals-saved-encounters", title: "Saved Encounters", listed: true,
     text: { en: "Save monsters as an encounter and place the whole group again with one click.",
       de: "Speichere Monster als Begegnung und stell die ganze Gruppe mit einem Klick wieder auf." } },
-  { id: "sephrals-swift-dice", title: "Swift Dice", listed: true,
+  { id: "sephrals-session-chronicle", title: "Session Chronicle", listed: false,
+    text: { en: "A recap of every game night, written for you: a page per session and a Previously card at the next start.",
+      de: "Ein Rückblick auf jeden Spielabend, für dich geschrieben: eine Seite pro Sitzung und eine Karte „Was bisher geschah“ zum nächsten Start." } },
+  { id: "sephrals-swift-dice", title: "Swift Dice", listed: true, supports: SWIFT_DICE_SYSTEMS,
     text: { en: "Light 3D dice for every roll, the same throw on every screen.",
       de: "Leichte 3D-Würfel für jeden Wurf, auf jedem Bildschirm derselbe Wurf." } },
   { id: "sephrals-table-compass", title: "Table Compass", listed: true,
     text: { en: "Anonymous feedback from your players on pace and tension.",
       de: "Anonyme Rückmeldung deiner Spieler zu Tempo und Spannung." } },
-  { id: "sephrals-tavern-games", title: "Tavern Games", listed: true,
+  { id: "sephrals-tavern-games", title: "Tavern Games", listed: true, langs: ["en", "de", "ru"],
     text: { en: "Dice, card and board games for the tavern table.",
       de: "Würfel, Karten und Brettspiele für den Tavernentisch." } },
-  { id: "sephrals-token-tooltips", title: "Token Tooltips", listed: true, supports: ["crucible", "dnd5e", "pf2e", "swade"],
+  { id: "sephrals-token-tooltips", title: "Token Tooltips", listed: true, supports: TOOLTIP_SYSTEMS,
     text: { en: "Health, armor and conditions when you hover over a token.",
       de: "Leben, Rüstung und Zustände, sobald du über ein Token fährst." } },
-  { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false,
+  { id: "sephrals-token-wardrobe", title: "Token Wardrobe", listed: false, supports: ["dnd5e", "pf2e", "swade", "crucible"],
     text: { en: "Outfits for every character, a conversation stage with backdrops and crowds where nobody looks the same.",
       de: "Outfits für jede Figur, eine Gesprächsbühne mit Kulissen und Gruppen, in denen keiner gleich aussieht." } },
+  { id: "sephrals-translator", title: "Translator", listed: false,
+    text: { en: "Translate a module into your language and see every word at once in its real windows.",
+      de: "Übersetze ein Modul in deine Sprache und sieh jedes Wort sofort in seinen echten Fenstern." } },
   { id: "sephrals-update-guard", title: "Update Guard", listed: false,
     text: { en: "Is your world ready for tonight? Errors of your players, modules in each other's way and the way back.",
       de: "Ist deine Welt bereit für heute Abend? Fehler deiner Spieler, Module, die sich in die Quere kommen, und der Weg zurück." } },
@@ -142,6 +163,24 @@ const CATALOG = [
 
 /** Modules that use each other: module gains something in a world where with is active. */
 const INTEGRATIONS = [
+  { module: "sephrals-session-chronicle", with: "sephrals-combat-log-stats",
+    text: { en: "Writes the fights from Combat Log & Stats into the recap of every game night.",
+      de: "Schreibt die Kämpfe aus Combat Log & Stats in den Rückblick auf jeden Spielabend." } },
+  { module: "sephrals-session-chronicle", with: "sephrals-campaign-album",
+    text: { en: "Puts the photos from Campaign Album on the page of every game night.",
+      de: "Legt die Fotos aus dem Campaign Album auf die Seite jedes Spielabends." } },
+  { module: "sephrals-session-chronicle", with: "sephrals-loot-ledger",
+    text: { en: "Lists the loot from Loot Ledger in the recap of every game night.",
+      de: "Listet die Beute aus dem Loot Ledger im Rückblick auf jeden Spielabend." } },
+  { module: "sephrals-combat-log-stats", with: "sephrals-session-chronicle",
+    text: { en: "Adds the numbers of the night’s fights to the Session Chronicle page: damage, healing and the hero of the night.",
+      de: "Ergänzt die Seite von Session Chronicle um die Zahlen der Kämpfe: Schaden, Heilung und den Helden des Abends." } },
+  { module: "sephrals-campaign-album", with: "sephrals-session-chronicle",
+    text: { en: "Puts the photos taken during the night on the Session Chronicle page.",
+      de: "Legt die Fotos des Abends auf die Seite von Session Chronicle." } },
+  { module: "sephrals-loot-ledger", with: "sephrals-session-chronicle",
+    text: { en: "Lists the loot the party found during the night on the Session Chronicle page.",
+      de: "Listet die Beute, die die Gruppe an diesem Abend gefunden hat, auf der Seite von Session Chronicle." } },
   { module: "sephrals-loot-ledger", with: "sephrals-deep-tables",
     text: { en: "Deep Tables sends what a table rolled straight into Loot Ledger, where your players claim it.",
       de: "Deep Tables schickt, was eine Tabelle gewürfelt hat, direkt in den Loot Ledger, dort beanspruchen es deine Spieler." } },
@@ -239,6 +278,10 @@ const TEXTS = {
     fits: "fits {title}",
     madeFor: "Made for this world",
     builtIn: "Built in support for {system}",
+    sysBadge: "Built in for {system}",
+    offFor: "Installed but off, fits {system}",
+    langSome: "Sephral’s modules with {language} texts: {list}. The others show English.",
+    langNone: "Sephral’s modules show English in {language} so far.",
     everySystem: "For every system",
     hidden: "{count} modules for other systems or settings are hidden.",
     hiddenOne: "1 module for another system or setting is hidden.",
@@ -315,6 +358,10 @@ const TEXTS = {
     fits: "passt zu {title}",
     madeFor: "Für diese Welt gemacht",
     builtIn: "Eingebaute Unterstützung für {system}",
+    sysBadge: "Eingebaut für {system}",
+    offFor: "Installiert, aber aus, passt zu {system}",
+    langSome: "Module von Sephral mit Texten auf {language}: {list}. Die anderen zeigen Englisch.",
+    langNone: "Die Module von Sephral zeigen auf {language} bisher Englisch.",
     everySystem: "Für jedes System",
     hidden: "{count} Module für andere Systeme oder Settings sind ausgeblendet.",
     hiddenOne: "1 Modul für ein anderes System oder Setting ist ausgeblendet.",
@@ -668,16 +715,21 @@ export function classifyResult(result) {
 /**
  * The modules not installed yet that fit the world, in groups.
  * @param {{modules: object[], integrations: object[]}} catalog
- * @param {{installed: Set<string>, active: Set<string>, system: string}} world
+ * @param {{installed: Set<string>, active: Set<string>, system: string, core?: number, lang?: string}} world
  *   installed: installed Sephral modules, active: every active module id (Sephral and others), system: game system id
- * @returns {{works: {entry: object, partner: string, text: object}[], made: object[], builtIn: object[], every: object[], hidden: number}}
+ * @returns {{works: {entry: object, partner: string, text: object}[], made: object[], builtIn: object[], every: object[], off: object[], hidden: number}}
  */
-export function suggestions(catalog, { installed, active, system, core = Infinity }) {
-  const groups = { works: [], made: [], builtIn: [], every: [], hidden: 0 };
+export function suggestions(catalog, { installed, active, system, core = Infinity, lang = "en" }) {
+  const groups = { works: [], made: [], builtIn: [], every: [], off: [], hidden: 0 };
   for (const entry of catalog.modules ?? []) {
-    if (installed.has(entry.id) || (entry.released === false)) continue;
+    if (entry.released === false) continue;
     const fits = (!entry.systems || entry.systems.includes(system)) && (!entry.core || (core >= entry.core));
     const needsMet = !entry.needs || active.has(entry.needs);
+    if (installed.has(entry.id)) {
+      // Installed but switched off: only worth a mention where it was made for this system.
+      if (!active.has(entry.id) && fits && needsMet && supportsSystem(entry, system)) groups.off.push(entry);
+      continue;
+    }
     if (!fits || !needsMet) {
       groups.hidden++;
       continue;
@@ -688,7 +740,37 @@ export function suggestions(catalog, { installed, active, system, core = Infinit
     else if (entry.supports?.includes(system)) groups.builtIn.push(entry);
     else groups.every.push(entry);
   }
+  // Modules with texts in the GM's language first, the order of the catalog otherwise.
+  const speaks = (entry) => (hasLanguage(entry, lang) ? 0 : 1);
+  groups.made.sort((a, b) => speaks(a) - speaks(b));
+  groups.builtIn.sort((a, b) => speaks(a) - speaks(b));
+  groups.every.sort((a, b) => speaks(a) - speaks(b));
   return groups;
+}
+
+/** True when the module has built in support for the game system (an adapter or preset) or was made for it. */
+export function supportsSystem(entry, system) {
+  return Boolean(system) && Boolean(entry?.supports?.includes(system) || entry?.systems?.includes(system));
+}
+
+/** True when the module has a lang file for the language, Foundry's "pt-BR" also matches "pt". */
+export function hasLanguage(entry, lang) {
+  const base = String(lang ?? "en").split("-")[0].toLowerCase();
+  return (entry?.langs ?? DEFAULT_LANGS).some((code) => code.toLowerCase().split("-")[0] === base);
+}
+
+/**
+ * What the window says about the GM's language. Only languages other than English: the languages every module has
+ * (English, German) need no remark, otherwise it names the modules that have texts in it, or says there are none.
+ * @param {object[]} entries   catalog modules
+ * @param {string} lang        game.i18n.lang
+ * @returns {{kind: "none"|"some"|"quiet", titles: string[]}}
+ */
+export function languageNote(entries, lang) {
+  const base = String(lang ?? "en").split("-")[0].toLowerCase();
+  if (DEFAULT_LANGS.includes(base)) return { kind: "quiet", titles: [] };
+  const titles = (entries ?? []).filter((entry) => entry.released !== false && hasLanguage(entry, lang)).map((entry) => entry.title);
+  return { kind: titles.length ? "some" : "none", titles };
 }
 
 /* -------------------------------------------- */
@@ -1134,6 +1216,40 @@ function testLine(module, result, missing = []) {
   }
 }
 
+const SHORT_SYSTEMS = { dnd5e: "D&D 5e", pf2e: "PF2e", sf2e: "SF2e", swade: "SWADE", crucible: "Crucible", daggerheart: "Daggerheart",
+  tormenta20: "Tormenta20" };
+
+/** A short name for a pill: "D&D 5e" instead of the long title, the title of systems without a short name. */
+export function shortSystem(system) {
+  return SHORT_SYSTEMS[system?.id] ?? system?.title ?? "";
+}
+
+/** Quiet pills: built in support for the world's system, and a language the other modules lack. */
+function infoPills(entry, { system = false } = {}) {
+  if (!entry) return "";
+  const game = globalThis.game;
+  let html = "";
+  if (system && supportsSystem(entry, game.system?.id)) {
+    html += `<span class="sh-pill sh-sys">${escape(text("sysBadge", { system: shortSystem(game.system) }))}</span>`;
+  }
+  const lang = game.i18n?.lang ?? "en";
+  const base = String(lang).split("-")[0].toLowerCase();
+  if (!DEFAULT_LANGS.includes(base) && hasLanguage(entry, lang)) {
+    html += `<span class="sh-pill sh-lang">${escape(languageName(lang))}</span>`;
+  }
+  return html;
+}
+
+/** The name of a language in that language ("ru" becomes "русский"), the code when the browser does not know it. */
+export function languageName(lang) {
+  try {
+    const name = new Intl.DisplayNames([lang], { type: "language" }).of(lang);
+    return name ? name.charAt(0).toLocaleUpperCase(lang) + name.slice(1) : lang;
+  } catch (error) {
+    return String(lang);
+  }
+}
+
 function moduleRow(module, entry) {
   const inCatalog = Boolean(entry);
   const result = registry().results.get(module.id);
@@ -1154,17 +1270,25 @@ function moduleRow(module, entry) {
     <div class="sh-row-main">
       <div class="sh-row-title"><strong>${escape(module.title)}</strong>
         <span class="sh-pill">${escape(module.version)}</span>
-        <span class="sh-pill ${module.active ? "sh-on" : ""}">${escape(text(module.active ? "active" : "off"))}</span></div>
+        <span class="sh-pill ${module.active ? "sh-on" : ""}">${escape(text(module.active ? "active" : "off"))}</span>${infoPills(entry, { system: true })}</div>
       ${testLine(module, result, missing)}
     </div>
     <div class="sh-row-actions">${actions}${manual}${videoButton(entry)}</div>
   </li>`;
 }
 
+function offCard(entry) {
+  return `<li class="sh-card${entry.id === focusModule ? " sh-card-focus sh-focus" : ""}">
+    <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${infoPills(entry)}</div>
+    <p>${escape(localized(entry.text))}</p>
+    <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="enable" data-module="${escape(entry.id)}"><i class="fa-solid fa-power-off" aria-hidden="true"></i><span>${escape(text("enable"))}</span></button></div>
+  </li>`;
+}
+
 function card(entry, extra = {}) {
   const fit = extra.partner ? `<span class="sh-pill sh-accent">${escape(text("fits", { title: extra.partner }))}</span>` : "";
   return `<li class="sh-card${extra.partner ? " sh-card-works" : ""}${entry.id === focusModule ? " sh-card-focus sh-focus" : ""}">
-    <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${fit}</div>
+    <div class="sh-row-title"><strong>${escape(entry.title)}</strong>${fit}${infoPills(entry, { system: !extra.quietSystem })}</div>
     <p>${escape(extra.text ? localized(extra.text) : localized(entry.text))}</p>
     <div class="sh-card-links"><button type="button" class="sh-play sh-get" data-action="install" data-count="hubLink" data-module="${escape(entry.id)}"><i class="fa-solid fa-download" aria-hidden="true"></i><span>${escape(text("install"))}</span></button>${demoVideo(entry) ? `<button type="button" class="sh-play sh-flame" data-action="video" data-count="hubVideo" data-module="${escape(entry.id)}"><i class="fa-solid fa-play" aria-hidden="true"></i><span>${escape(text("watchVideo"))}</span></button>` : ""}${packageLink(entry)}</div>
   </li>`;
@@ -1198,16 +1322,22 @@ function renderContent(moreOpen) {
     installed: new Set(installed.map((module) => module.id)),
     active: new Set(Array.from(game.modules ?? []).filter((module) => module.active).map((module) => module.id)),
     system: system.id,
-    core: Number(game.release?.generation ?? Infinity)
+    core: Number(game.release?.generation ?? Infinity),
+    lang: game.i18n?.lang ?? "en"
   });
-  const fitting = groups.works.length + groups.made.length + groups.builtIn.length + groups.every.length;
+  const fitting = groups.off.length + groups.works.length + groups.made.length + groups.builtIn.length + groups.every.length;
+  const langNote = languageNote(catalog.modules, game.i18n?.lang ?? "en");
+  const langLine = langNote.kind === "quiet" ? ""
+    : `<p class="sh-hint sh-lang-note">${escape(langNote.kind === "none" ? text("langNone", { language: languageName(game.i18n.lang) })
+      : text("langSome", { language: languageName(game.i18n.lang), list: langNote.titles.join(", ") }))}</p>`;
   const titleOf = (id) => shortTitle(game.modules.get(id)?.title)
     || catalog.modules.find((entry) => entry.id === id)?.title || id;
   const section = (label, cards) => (cards.length ? `<h3>${escape(label)}</h3><ul class="sh-cards">${cards.join("")}</ul>` : "");
   const moreBody = moreOpen ? [
+    section(text("offFor", { system: system.title }), groups.off.map((entry) => offCard(entry))),
     section(text("worksWith"), groups.works.map((item) => card(item.entry, { partner: titleOf(item.partner), text: item.text }))),
-    section(text("madeFor"), groups.made.map((entry) => card(entry))),
-    section(text("builtIn", { system: system.title }), groups.builtIn.map((entry) => card(entry))),
+    section(text("madeFor"), groups.made.map((entry) => card(entry, { quietSystem: true }))),
+    section(text("builtIn", { system: system.title }), groups.builtIn.map((entry) => card(entry, { quietSystem: true }))),
     section(text("everySystem"), groups.every.map((entry) => card(entry))),
     groups.hidden ? `<p class="sh-hint">${escape(groups.hidden === 1 ? text("hiddenOne") : text("hidden", { count: groups.hidden }))}</p>` : ""
   ].join("") : "";
@@ -1231,6 +1361,7 @@ function renderContent(moreOpen) {
   ${newer.length ? `<div class="sh-banner"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><p>${escape(text("newer", { list: newerList }))}</p></div>` : ""}
   <section class="sh-panel">
     <header class="sh-panel-head"><h2>${escape(text("inWorld"))}</h2><span class="sh-hint">${escape(text("inWorldHint"))}</span></header>
+    ${langLine}
     <ul class="sh-rows">${installed.map((module) => moduleRow(module, catalogById.get(module.id))).join("")}</ul>
   </section>
   <section class="sh-panel sh-more">
@@ -1311,6 +1442,8 @@ body.theme-light .sephrals-hub:not(.themed), .sephrals-hub.themed.theme-light {
 }
 .sephrals-hub .sh-pill.sh-on { color: var(--sh-ok); }
 .sephrals-hub .sh-pill.sh-accent { color: var(--sh-accent); background: var(--sh-accent-soft); }
+.sephrals-hub .sh-pill.sh-sys, .sephrals-hub .sh-pill.sh-lang { color: var(--sh-accent); background: transparent; border: 1px solid var(--sh-line); }
+.sephrals-hub .sh-lang-note { margin: 0 0 8px; }
 .sephrals-hub .sh-note { font-size: 13px; color: var(--sh-muted); }
 .sephrals-hub .sh-note.sh-ok i { color: var(--sh-ok); }
 .sephrals-hub .sh-note.sh-warn i { color: var(--sh-warn); }
