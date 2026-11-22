@@ -16,7 +16,7 @@
  */
 
 export const HUB_LIB_VERSION = 5;
-export const CATALOG_REVISION = 2026112202;
+export const CATALOG_REVISION = 2026112203;
 
 const REGISTRY_KEY = "sephralsHub";
 const WINDOW_ID = "sephrals-hub";
@@ -60,13 +60,12 @@ const SWIFT_DICE_SYSTEMS = ["dnd5e", "pf2e", "swade", "crucible", "daggerheart",
   "impmal", "brp", "mythras", "rqg", "dragonbane", "symbaroum", "cairn", "cyberpunk-red-core", "blades-in-the-dark", "alienrpg",
   "forbidden-lands", "vaesen", "t2k4e", "blade-runner", "fate-core-official", "ModularFate", "fate", "pbta", "dungeonworld",
   "cyphersystem", "gurps", "draw-steel", "shadowrun5e", "shadowrun6-eden"];
-// Only what is released: Daggerheart and Tormenta20 of Roll Breakdown and Roll Requests and Pathfinder 2e of Campaign
-// Album are built but not released yet, add them with a new CATALOG_REVISION in the release that ships them.
-const ROLL_SYSTEMS = ["crucible", "dnd5e", "pf2e", "sf2e", "swade"];
+// Only what is released (Daggerheart and Tormenta20 since Roll Breakdown 1.0.22 and Roll Requests 1.0.7)
+const ROLL_SYSTEMS = ["crucible", "daggerheart", "dnd5e", "pf2e", "sf2e", "swade", "tormenta20"];
 const TOOLTIP_SYSTEMS = ["dnd5e", "pf2e", "swade", "crucible", "daggerheart", "CoC7", "shadowdark", "projectfu", "shadowrun6-eden",
   "dolmenwood", "rqg"];
 const CATALOG = [
-  { id: "sephrals-campaign-album", title: "Campaign Album", listed: true, supports: ["crucible", "dnd5e"],
+  { id: "sephrals-campaign-album", title: "Campaign Album", listed: true, supports: ["crucible", "dnd5e", "pf2e"],
     text: { en: "Crits, fallen bosses and level ups, photographed on their own.",
       de: "Kritische Treffer, gefallene Bosse und Stufenaufstiege, ganz von selbst fotografiert." } },
   { id: "sephrals-combat-log-stats", title: "Combat Log & Stats", listed: true, supports: ["crucible", "dnd5e", "pf2e"],
